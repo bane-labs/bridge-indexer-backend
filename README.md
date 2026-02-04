@@ -150,18 +150,18 @@ Must be able to run as a single binary. Suitable for long-running indexing workl
 ```text
 .
 ├── cmd/
-│   └── server/           # Application entry point
+│   └── server/          # Application entry point
 ├── internal/
-│   ├── api/             # HTTP API handlers  
+│   ├── api/             # HTTP API handlers
 │   ├── indexer/         # Blockchain indexing logic
 │   ├── monitor/         # Health monitoring & alerting
-│   ├── database/        # BadgerDB operations
+│   ├── datastore/       # Datastore operations and storage
 │   └── config/          # Configuration management
 ├── pkg/
-│   ├── neo/             # Neo blockchain clients
+│   ├── n3/              # Neo N3 blockchain client
+│   ├── ethereum/        # Ethereum/Neo X blockchain client
 │   └── types/           # Shared data types
-├── docs/                # Documentation
-└── deployments/         # Deployment configurations
+└── docs/                # Documentation
 ```
 
 ### Core Components

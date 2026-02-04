@@ -7,14 +7,14 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/bane-labs/bridge-indexer-backend/internal/store"
+	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 )
 
 // Server represents the HTTP server
 type Server struct {
-	echo      *echo.Echo
-	dataStore *store.DataStore
-	logger    *slog.Logger
+	echo   *echo.Echo
+	store  *datastore.DataStore
+	logger *slog.Logger
 }
 
 // New creates a new server instance
@@ -32,21 +32,21 @@ func New() (*Server, error) {
 	}
 
 	// Initialize BadgerDB store using the pattern
-	badgerDb, err := store.NewBadgerDbStore(store.NewDbOptions(&dbPath), logger)
+	badgerDb, err := datastore.NewBadgerDbStore(datastore.NewDbOptions(&dbPath), logger)
 	if err != nil {
 		logger.Error("Failed to create new BadgerDB store", "error", err)
 		return nil, err
 	}
 
-	dataStore := store.NewDataStore(badgerDb)
+	store := datastore.NewDataStore(badgerDb)
 
 	// Initialize Echo
 	e := echo.New()
 
 	s := &Server{
-		echo:      e,
-		dataStore: dataStore,
-		logger:    logger,
+		echo:   e,
+		store:  store,
+		logger: logger,
 	}
 
 	s.setupRoutes()
@@ -64,8 +64,8 @@ func (s *Server) setupRoutes() {
 }
 
 // GetDataStore returns the configured DataStore for use by other components
-func (s *Server) GetDataStore() *store.DataStore {
-	return s.dataStore
+func (s *Server) GetDataStore() *datastore.DataStore {
+	return s.store
 }
 
 // GetLogger returns the configured logger
