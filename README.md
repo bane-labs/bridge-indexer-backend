@@ -362,3 +362,7 @@ GOOS=linux GOARCH=amd64 go build -o bin/bridge-indexer-linux cmd/server/main.go
 - **Documentation**: [docs/](./docs/)
 - **Neo Developer Resources**: [Neo Documentation](https://docs.neo.org/)
 - **Discord**: Neo community channels for blockchain-specific questions
+
+## License
+
+This project is licensed under the Apache License, Version 2.0 - see the [LICENSE](LICENSE) file for details.
