@@ -1,3 +1,6 @@
+# Sisyphus working directory
+.sisyphus/
+
 # Binaries for programs and plugins
 *.exe
 *.exe~
@@ -7,6 +10,7 @@
 main
 bridge-indexer
 bridge-indexer-*
+/server
 bin/
 dist/
 
@@ -35,6 +39,7 @@ go.work
 ._*
 .Spotlight-V100
 .Trashes
+.cache
 ehthumbs.db
 Thumbs.db
 

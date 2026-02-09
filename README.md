@@ -97,22 +97,26 @@ All configuration must be done via environment variables.
 
 ### Required
 
-- Neo N3 JSON-RPC endpoint(s)
-- Neo X JSON-RPC endpoint(s)
+- `NEO_N3_RPC_ENDPOINTS` (comma-separated list, supports multiple nodes)
+- `NEO_X_RPC_ENDPOINTS` (comma-separated list, supports multiple nodes)
 
 ### Optional
 
-- Alert thresholds (e.g. max allowed delay)
-- Discord webhook URL
-- SMTP configuration
+- `BRIDGE_MAX_DELAY` (default `5m`)
+- `BADGER_DB_PATH` (default `./data/badger`)
+- `SERVER_PORT` (default `8080`)
+- `DISCORD_WEBHOOK_URL`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TO`
 
-JSON-RPC endpoints must be fully configurable (multiple nodes supported).
+Alert channels are enabled only when full config is present. Missing optional alert config disables the channel without failing startup.
 
 ## Usage
 
 ### Development Mode
 
 ```bash
+export NEO_N3_RPC_ENDPOINTS="https://your-n3-rpc"
+export NEO_X_RPC_ENDPOINTS="https://your-neox-rpc"
 go run cmd/server/main.go
 ```
 
@@ -120,6 +124,8 @@ go run cmd/server/main.go
 
 ```bash
 go build -o bin/bridge-indexer cmd/server/main.go
+export NEO_N3_RPC_ENDPOINTS="https://your-n3-rpc"
+export NEO_X_RPC_ENDPOINTS="https://your-neox-rpc"
 ./bin/bridge-indexer
 ```
 
@@ -152,15 +158,15 @@ Must be able to run as a single binary. Suitable for long-running indexing workl
 ├── cmd/
 │   └── server/          # Application entry point
 ├── internal/
+│   ├── alert/           # Alerting boundary (email/discord)
 │   ├── api/             # HTTP API handlers
-│   ├── indexer/         # Blockchain indexing logic
-│   ├── monitor/         # Health monitoring & alerting
-│   ├── datastore/       # Datastore operations and storage
-│   └── config/          # Configuration management
-├── pkg/
-│   ├── n3/              # Neo N3 blockchain client
-│   ├── ethereum/        # Ethereum/Neo X blockchain client
-│   └── types/           # Shared data types
+│   ├── config/          # Environment configuration
+│   ├── datastore/       # Existing BadgerDB adapter
+│   ├── domain/          # Shared bridge domain model
+│   ├── indexer/         # Indexing module boundary
+│   ├── metrics/         # Metrics module boundary
+│   ├── monitor/         # Monitoring module boundary
+│   └── store/           # Storage module boundary
 └── docs/                # Documentation
 ```
 

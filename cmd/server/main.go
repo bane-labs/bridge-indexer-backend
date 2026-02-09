@@ -2,52 +2,71 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"log"
+	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/bane-labs/bridge-indexer-backend/internal/server"
+	"github.com/labstack/echo/v4"
+
+	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 )
 
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	srv, err := server.New()
+	dbPath := "./data/badger"
+	if err := os.MkdirAll(dbPath, 0o755); err != nil {
+		logger.Error("Failed to create database directory", "error", err)
+		os.Exit(1)
+	}
+
+	store, err := datastore.NewBadgerDbStore(datastore.NewDbOptions(&dbPath), logger)
 	if err != nil {
-		log.Fatalf("Failed to initialize server: %v", err)
+		logger.Error("Failed to initialize BadgerDB", "error", err)
+		os.Exit(1)
 	}
-
-	fmt.Println("Bridge Indexer Backend starting on :8080")
-
-	// Start server with timeout
-	server := &http.Server{
-		Addr:    ":8080",
-		Handler: srv,
-	}
-
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("Server failed to start: %v", err)
-			cancel()
+	ds := datastore.NewDataStore(store)
+	defer func() {
+		if closeErr := ds.Close(); closeErr != nil {
+			logger.Error("Failed to close datastore", "error", closeErr)
 		}
 	}()
 
-	// Wait for SIGTERM signal
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	e := echo.New()
 
-	select {
-	case <-ctx.Done():
-		fmt.Println("Server context cancelled")
-	case sig := <-sigChan:
-		fmt.Printf("Received signal: %v\n", sig)
-		cancel()
+	srv := &http.Server{
+		Addr:              ":8080",
+		Handler:           e,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	fmt.Println("Shutting down server...")
-	os.Exit(0)
+	serverErrCh := make(chan error, 1)
+	go func() {
+		logger.Info("Bridge Indexer Backend starting", "port", "8080")
+		if serveErr := srv.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			serverErrCh <- serveErr
+		}
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	select {
+	case sig := <-sigCh:
+		logger.Info("Shutdown signal received", "signal", sig)
+	case serveErr := <-serverErrCh:
+		logger.Error("Server failed", "error", serveErr)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if shutdownErr := srv.Shutdown(shutdownCtx); shutdownErr != nil {
+		logger.Error("Shutdown error", "error", shutdownErr)
+	}
+
+	logger.Info("Bridge Indexer Backend stopped")
 }
