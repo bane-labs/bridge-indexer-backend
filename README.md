@@ -93,20 +93,37 @@ The system monitors three distinct bridge types with independent status tracking
 
 ## Configuration
 
-All configuration must be done via environment variables.
+All configuration is done via environment variables. Copy `.env.example` to `.env` for local development:
+
+```bash
+cp .env.example .env
+```
 
 ### Required
 
-- `NEO_N3_RPC_ENDPOINTS` (comma-separated list, supports multiple nodes)
-- `NEO_X_RPC_ENDPOINTS` (comma-separated list, supports multiple nodes)
+| Variable | Description |
+|----------|-------------|
+| `NEO_N3_RPC_ENDPOINTS` | Neo N3 JSON-RPC endpoints (comma-separated) |
+| `NEOX_RPC_ENDPOINTS` | Neo X JSON-RPC endpoints (comma-separated) |
 
 ### Optional
 
-- `MAX_RELAY_LATENCY` (default `5m`)
-- `DB_PATH` (default `./data`)
-- `SERVER_PORT` (default `8080`)
-- `DISCORD_WEBHOOK_URL`
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TO`
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SERVER_PORT` | `8080` | HTTP server port |
+| `DB_PATH` | `./data/badger` | BadgerDB data directory |
+| `STUCK_THRESHOLD_MINUTES` | `5` | Stuck operation detection threshold (minutes) |
+| `DISCORD_WEBHOOK_URL` | | Discord webhook URL for alerts |
+| `SMTP_HOST` | | SMTP server host |
+| `SMTP_PORT` | `587` | SMTP server port |
+| `SMTP_USER` | | SMTP username |
+| `SMTP_PASS` | | SMTP password |
+| `SMTP_FROM` | | Alert sender email address |
+| `ALERT_RECIPIENTS` | | Alert recipient emails (comma-separated) |
+| `NEOX_TOKEN_BRIDGE` | `0x1212...0004` | Neo X TokenBridge contract address |
+| `NEOX_MESSAGE_BRIDGE` | `0x1212...0009` | Neo X MessageBridge contract address |
+| `N3_NEOX_BRIDGE` | `0xbb19...13d2` | Neo N3 NeoXBridge script hash |
+| `N3_MESSAGE_BRIDGE` | `0xde9c...bd11` | Neo N3 MessageBridge script hash |
 
 Alert channels are enabled only when full config is present. Missing optional alert config disables the channel without failing startup.
 
@@ -115,8 +132,8 @@ Alert channels are enabled only when full config is present. Missing optional al
 ### Development Mode
 
 ```bash
-export NEO_N3_RPC_ENDPOINTS="https://your-n3-rpc"
-export NEO_X_RPC_ENDPOINTS="https://your-neox-rpc"
+cp .env.example .env
+# Edit .env with your RPC endpoints
 go run cmd/server/main.go
 ```
 
@@ -124,8 +141,8 @@ go run cmd/server/main.go
 
 ```bash
 go build -o bin/bridge-indexer cmd/server/main.go
-export NEO_N3_RPC_ENDPOINTS="https://your-n3-rpc"
-export NEO_X_RPC_ENDPOINTS="https://your-neox-rpc"
+NEO_N3_RPC_ENDPOINTS="https://your-n3-rpc" \
+NEOX_RPC_ENDPOINTS="https://your-neox-rpc" \
 ./bin/bridge-indexer
 ```
 
