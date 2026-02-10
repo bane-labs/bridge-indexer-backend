@@ -21,6 +21,3 @@ Use Markdown format for documentation files and follow these conventions:
 - Always add an empty line before code blocks
 - Specify language for code blocks (e.g., `json`, `bash`, `go`)
 
-## Current Architecture Docs
-
-- `architecture/01-goal-scope.md` - Phase 1 scope, module boundaries, and on-chain-only constraints

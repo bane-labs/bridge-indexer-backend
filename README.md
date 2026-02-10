@@ -102,8 +102,8 @@ All configuration must be done via environment variables.
 
 ### Optional
 
-- `BRIDGE_MAX_DELAY` (default `5m`)
-- `BADGER_DB_PATH` (default `./data/badger`)
+- `MAX_RELAY_LATENCY` (default `5m`)
+- `DB_PATH` (default `./data`)
 - `SERVER_PORT` (default `8080`)
 - `DISCORD_WEBHOOK_URL`
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TO`

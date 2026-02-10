@@ -18,7 +18,7 @@ import (
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	dbPath := "./data/badger"
+	dbPath := "./data"
 	if err := os.MkdirAll(dbPath, 0o755); err != nil {
 		logger.Error("Failed to create database directory", "error", err)
 		os.Exit(1)

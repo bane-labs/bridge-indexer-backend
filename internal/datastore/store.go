@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"sync"
 
-	_ "github.com/dgraph-io/badger/v4"
 	"github.com/philippgille/gokv"
 	"github.com/philippgille/gokv/badgerdb"
 	"github.com/philippgille/gokv/encoding"
