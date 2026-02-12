@@ -2,6 +2,9 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -69,17 +72,7 @@ var envKeys = []string{
 	"N3_MESSAGE_BRIDGE",
 }
 
-func Load() (*Config, error) {
-	v := viper.New()
-	v.SetConfigFile(".env")
-	v.SetConfigType("env")
-	_ = v.ReadInConfig() // .env file is optional — missing is fine
-	v.AutomaticEnv()
-
-	for _, key := range envKeys {
-		_ = v.BindEnv(key)
-	}
-
+func SetDefaults(v *viper.Viper) {
 	v.SetDefault("STUCK_THRESHOLD_MINUTES", 5)
 	v.SetDefault("SMTP_PORT", 587)
 	v.SetDefault("SERVER_PORT", "8080")
@@ -88,6 +81,28 @@ func Load() (*Config, error) {
 	v.SetDefault("NEOX_MESSAGE_BRIDGE", "0x1212000000000000000000000000000000000009")
 	v.SetDefault("N3_NEOX_BRIDGE", "0xbb19cfc864b73159277e1fd39694b3fd5fc613d2")
 	v.SetDefault("N3_MESSAGE_BRIDGE", "0xde9cc59df7484ae2f2d2c1ce7a66dccbd5c8bd11")
+}
+
+func Load(v *viper.Viper) (*Config, error) {
+	v.SetConfigFile(".env")
+	v.SetConfigType("env")
+	v.AutomaticEnv()
+
+	if err := v.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			slog.Info("No .env file found, using environment variables only")
+		} else if os.IsNotExist(err) {
+			slog.Info("No .env file found, using environment variables only")
+		} else {
+			return nil, fmt.Errorf("failed to read config file: %w", err)
+		}
+	}
+
+	for _, key := range envKeys {
+		_ = v.BindEnv(key)
+	}
+
+	SetDefaults(v)
 
 	var raw rawConfig
 	if err := v.Unmarshal(&raw); err != nil {
@@ -122,14 +137,41 @@ func (c *Config) Validate() error {
 	if len(c.N3RPCEndpoints) == 0 {
 		errs = append(errs, "NEO_N3_RPC_ENDPOINTS is required but not set")
 	}
+	for _, ep := range c.N3RPCEndpoints {
+		if err := validateEndpointURL(ep); err != nil {
+			errs = append(errs, fmt.Sprintf("NEO_N3_RPC_ENDPOINTS: %v", err))
+		}
+	}
+
 	if len(c.NeoXRPCEndpoints) == 0 {
 		errs = append(errs, "NEOX_RPC_ENDPOINTS is required but not set")
+	}
+	for _, ep := range c.NeoXRPCEndpoints {
+		if err := validateEndpointURL(ep); err != nil {
+			errs = append(errs, fmt.Sprintf("NEOX_RPC_ENDPOINTS: %v", err))
+		}
 	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("configuration validation failed: %s", strings.Join(errs, "; "))
 	}
 
+	return nil
+}
+
+func validateEndpointURL(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("URL %q is not valid: %w", endpoint, err)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL %q has no host", endpoint)
+	}
+	switch u.Scheme {
+	case "http", "https", "ws", "wss":
+	default:
+		return fmt.Errorf("URL %q has unsupported scheme %q", endpoint, u.Scheme)
+	}
 	return nil
 }
 

@@ -4,7 +4,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/viper"
 )
+
+func newViper() *viper.Viper {
+	return viper.New()
+}
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
@@ -23,9 +29,9 @@ func setRequiredEnv(t *testing.T) {
 func TestLoadConfig_RequiredOnly(t *testing.T) {
 	setRequiredEnv(t)
 
-	cfg, err := Load()
+	cfg, err := Load(newViper())
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("Load(newViper()) returned error: %v", err)
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -59,9 +65,9 @@ func TestLoadConfig_AllFields(t *testing.T) {
 	t.Setenv("N3_NEOX_BRIDGE", "0x111222")
 	t.Setenv("N3_MESSAGE_BRIDGE", "0x333444")
 
-	cfg, err := Load()
+	cfg, err := Load(newViper())
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("Load(newViper()) returned error: %v", err)
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -132,9 +138,9 @@ func TestValidate_MissingRequiredFields(t *testing.T) {
 			setRequiredEnv(t)
 			t.Setenv(tt.key, "")
 
-			cfg, err := Load()
+			cfg, err := Load(newViper())
 			if err != nil {
-				t.Fatalf("Load() returned error: %v", err)
+				t.Fatalf("Load(newViper()) returned error: %v", err)
 			}
 
 			err = cfg.Validate()
@@ -152,9 +158,9 @@ func TestValidate_MissingRequiredFields(t *testing.T) {
 func TestLoadConfig_Defaults(t *testing.T) {
 	setRequiredEnv(t)
 
-	cfg, err := Load()
+	cfg, err := Load(newViper())
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("Load(newViper()) returned error: %v", err)
 	}
 
 	if cfg.StuckThreshold != 5*time.Minute {
@@ -196,9 +202,9 @@ func TestLoadConfig_StuckThreshold(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("STUCK_THRESHOLD_MINUTES", "10")
 
-	cfg, err := Load()
+	cfg, err := Load(newViper())
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("Load(newViper()) returned error: %v", err)
 	}
 
 	if cfg.StuckThreshold != 10*time.Minute {
@@ -211,9 +217,9 @@ func TestLoadConfig_MultipleEndpoints(t *testing.T) {
 	t.Setenv("NEO_N3_RPC_ENDPOINTS", "http://seed1:10332, http://seed2:10332, http://seed3:10332")
 	t.Setenv("NEOX_RPC_ENDPOINTS", "https://rpc1.example.com,https://rpc2.example.com")
 
-	cfg, err := Load()
+	cfg, err := Load(newViper())
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("Load(newViper()) returned error: %v", err)
 	}
 
 	if len(cfg.N3RPCEndpoints) != 3 {
@@ -238,9 +244,9 @@ func TestValidate_DoesNotRequireOptionalSMTP(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("SMTP_HOST", "smtp.example.com")
 
-	cfg, err := Load()
+	cfg, err := Load(newViper())
 	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
+		t.Fatalf("Load(newViper()) returned error: %v", err)
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -274,6 +280,50 @@ func TestDiscordConfigured(t *testing.T) {
 	cfg.DiscordWebhookURL = "https://discord.com/api/webhooks/123/abc"
 	if !cfg.DiscordConfigured() {
 		t.Error("DiscordConfigured() should be true with webhook URL set")
+	}
+}
+
+func TestValidate_InvalidEndpointURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		n3      string
+		neox    string
+		wantErr string
+	}{
+		{"no scheme", "seed1.neo.org:10332", "https://rpc.example.com", "has no host"},
+		{"bad scheme", "ftp://seed1.neo.org:10332", "https://rpc.example.com", "unsupported scheme"},
+		{"neox invalid", "http://seed1.neo.org:10332", "not-a-url", "has no host"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				N3RPCEndpoints:   []string{tt.n3},
+				NeoXRPCEndpoints: []string{tt.neox},
+			}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate() should return error for invalid endpoint URL")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error %q should contain %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidate_ValidEndpointSchemes(t *testing.T) {
+	schemes := []string{"http", "https", "ws", "wss"}
+	for _, scheme := range schemes {
+		t.Run(scheme, func(t *testing.T) {
+			cfg := &Config{
+				N3RPCEndpoints:   []string{scheme + "://seed1.neo.org:10332"},
+				NeoXRPCEndpoints: []string{scheme + "://rpc.example.com"},
+			}
+			if err := cfg.Validate(); err != nil {
+				t.Errorf("Validate() should accept %s scheme, got: %v", scheme, err)
+			}
+		})
 	}
 }
 
