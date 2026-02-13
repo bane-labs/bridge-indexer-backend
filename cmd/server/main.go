@@ -35,7 +35,6 @@ func run(cmd *cobra.Command, args []string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	v := viper.New()
-	config.SetDefaults(v)
 
 	cfg, err := config.Load(v)
 	if err != nil {
