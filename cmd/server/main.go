@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,23 +12,45 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
+	"github.com/bane-labs/bridge-indexer-backend/internal/config"
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-
-	dbPath := "./data"
-	if err := os.MkdirAll(dbPath, 0o755); err != nil {
-		logger.Error("Failed to create database directory", "error", err)
-		os.Exit(1)
+	rootCmd := &cobra.Command{
+		Use:   "bridge-indexer",
+		Short: "Neo X <-> Neo N3 Bridge Indexer & Monitoring Backend",
+		RunE:  run,
 	}
 
-	store, err := datastore.NewBadgerDbStore(datastore.NewDbOptions(&dbPath), logger)
-	if err != nil {
-		logger.Error("Failed to initialize BadgerDB", "error", err)
+	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
+	}
+}
+
+func run(cmd *cobra.Command, args []string) error {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	v := viper.New()
+
+	cfg, err := config.Load(v)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	if err := os.MkdirAll(cfg.DBPath, 0o755); err != nil {
+		return fmt.Errorf("failed to create database directory: %w", err)
+	}
+
+	store, err := datastore.NewBadgerDbStore(datastore.NewDbOptions(&cfg.DBPath), logger)
+	if err != nil {
+		return fmt.Errorf("failed to initialize BadgerDB: %w", err)
 	}
 	ds := datastore.NewDataStore(store)
 	defer func() {
@@ -38,15 +61,16 @@ func main() {
 
 	e := echo.New()
 
+	addr := ":" + cfg.ServerPort
 	srv := &http.Server{
-		Addr:              ":8080",
+		Addr:              addr,
 		Handler:           e,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	serverErrCh := make(chan error, 1)
 	go func() {
-		logger.Info("Bridge Indexer Backend starting", "port", "8080")
+		logger.Info("Bridge Indexer Backend starting", "port", cfg.ServerPort)
 		if serveErr := srv.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			serverErrCh <- serveErr
 		}
@@ -69,4 +93,5 @@ func main() {
 	}
 
 	logger.Info("Bridge Indexer Backend stopped")
+	return nil
 }
