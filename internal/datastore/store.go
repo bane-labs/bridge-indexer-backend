@@ -36,8 +36,13 @@ func NewStore(path string, logger *slog.Logger) (*Store, error) {
 	return &Store{db: db, logger: logger}, nil
 }
 
-// newStoreWithDB creates a Store from an already-opened badger.DB (used in tests).
+// newStoreWithDB creates a Store from an already-opened badger.DB (internal tests).
 func newStoreWithDB(db *badger.DB, logger *slog.Logger) *Store {
+	return &Store{db: db, logger: logger}
+}
+
+// NewStoreFromDB creates a Store from an already-opened badger.DB (cross-package tests).
+func NewStoreFromDB(db *badger.DB, logger *slog.Logger) *Store {
 	return &Store{db: db, logger: logger}
 }
 
