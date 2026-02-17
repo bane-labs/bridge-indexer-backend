@@ -1,68 +1,146 @@
 package datastore
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
-	"sync"
 
-	"github.com/philippgille/gokv"
-	"github.com/philippgille/gokv/badgerdb"
-	"github.com/philippgille/gokv/encoding"
+	badger "github.com/dgraph-io/badger/v4"
 )
 
-// DataStore wraps gokv.Store with thread safety
-type DataStore struct {
-	mu    sync.RWMutex
-	store gokv.Store
+// ErrNotFound is returned when a key does not exist in the store.
+var ErrNotFound = errors.New("key not found")
+
+// WriteOp represents a single write operation for batch writes.
+// If Value is nil the key is deleted.
+type WriteOp struct {
+	Key   string
+	Value interface{} // nil means delete
 }
 
-// NewDataStore creates a new DataStore instance
-func NewDataStore(store gokv.Store) *DataStore {
-	return &DataStore{
-		mu:    sync.RWMutex{},
-		store: store,
-	}
+// Store wraps BadgerDB v4 with JSON serialization and prefix-scan support.
+type Store struct {
+	db     *badger.DB
+	logger *slog.Logger
 }
 
-// getValue retrieves a value from the store
-func (ds *DataStore) getValue(key string, value any) (bool, error) {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-	return ds.store.Get(key, value)
-}
-
-// setValue stores a value in the store
-func (ds *DataStore) setValue(key string, value any) error {
-	ds.mu.Lock()
-	defer ds.mu.Unlock()
-	return ds.store.Set(key, value)
-}
-
-// Close closes the underlying store
-func (ds *DataStore) Close() error {
-	return ds.store.Close()
-}
-
-// prefixedDataStore provides key prefixing functionality
-type prefixedDataStore struct {
-	prefix    string
-	dataStore *DataStore
-}
-
-// NewDbOptions creates BadgerDB options with the given path
-func NewDbOptions(path *string) badgerdb.Options {
-	return badgerdb.Options{
-		Dir:   *path,
-		Codec: encoding.JSON,
-	}
-}
-
-// NewBadgerDbStore creates a new BadgerDB store
-func NewBadgerDbStore(opts badgerdb.Options, logger *slog.Logger) (gokv.Store, error) {
-	logger.Info("Creating new BadgerDB store")
-	store, err := badgerdb.NewStore(opts)
+// NewStore opens a BadgerDB database at the given path.
+func NewStore(path string, logger *slog.Logger) (*Store, error) {
+	opts := badger.DefaultOptions(path)
+	opts.Logger = nil // suppress badger internal logging
+	db, err := badger.Open(opts)
 	if err != nil {
-		logger.Error("Failed to create new BadgerDB store", "error", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to open badger db: %w", err)
 	}
-	return store, nil
+	return &Store{db: db, logger: logger}, nil
+}
+
+// newStoreWithDB creates a Store from an already-opened badger.DB (used in tests).
+func newStoreWithDB(db *badger.DB, logger *slog.Logger) *Store {
+	return &Store{db: db, logger: logger}
+}
+
+// Get retrieves a JSON-encoded value by key. Returns ErrNotFound when absent.
+func (s *Store) Get(key string, dest interface{}) error {
+	return s.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte(key))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			return json.Unmarshal(val, dest)
+		})
+	})
+}
+
+// Set stores a JSON-encoded value under the given key.
+func (s *Store) Set(key string, value interface{}) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("failed to marshal value: %w", err)
+	}
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(key), data)
+	})
+}
+
+// Delete removes a key from the store.
+func (s *Store) Delete(key string) error {
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete([]byte(key))
+	})
+}
+
+// BatchWrite atomically writes multiple operations.
+func (s *Store) BatchWrite(ops []WriteOp) error {
+	wb := s.db.NewWriteBatch()
+	defer wb.Cancel()
+
+	for _, op := range ops {
+		if op.Value == nil {
+			if err := wb.Delete([]byte(op.Key)); err != nil {
+				return err
+			}
+		} else {
+			data, err := json.Marshal(op.Value)
+			if err != nil {
+				return fmt.Errorf("failed to marshal value for key %s: %w", op.Key, err)
+			}
+			if err := wb.Set([]byte(op.Key), data); err != nil {
+				return err
+			}
+		}
+	}
+	return wb.Flush()
+}
+
+// ScanPrefix iterates over all keys with the given prefix, calling fn for each.
+func (s *Store) ScanPrefix(prefix string, fn func(key string, value []byte) error) error {
+	return s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte(prefix)
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		pfx := []byte(prefix)
+		for it.Seek(pfx); it.ValidForPrefix(pfx); it.Next() {
+			item := it.Item()
+			k := string(item.Key())
+			if err := item.Value(func(val []byte) error {
+				return fn(k, val)
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// HasKey returns true if the key exists.
+func (s *Store) HasKey(key string) (bool, error) {
+	err := s.db.View(func(txn *badger.Txn) error {
+		_, err := txn.Get([]byte(key))
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// DB returns the underlying badger.DB for advanced operations.
+func (s *Store) DB() *badger.DB {
+	return s.db
+}
+
+// Close closes the database.
+func (s *Store) Close() error {
+	return s.db.Close()
 }
