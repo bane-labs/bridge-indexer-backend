@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,8 +16,14 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/bane-labs/bridge-indexer-backend/internal/alerter"
+	"github.com/bane-labs/bridge-indexer-backend/internal/api"
 	"github.com/bane-labs/bridge-indexer-backend/internal/config"
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
+	"github.com/bane-labs/bridge-indexer-backend/internal/indexer"
+	"github.com/bane-labs/bridge-indexer-backend/internal/monitor"
+	"github.com/bane-labs/bridge-indexer-backend/pkg/n3"
+	"github.com/bane-labs/bridge-indexer-backend/pkg/neox"
 )
 
 func main() {
@@ -35,7 +42,6 @@ func run(cmd *cobra.Command, args []string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	v := viper.New()
-
 	cfg, err := config.Load(v)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -43,6 +49,12 @@ func run(cmd *cobra.Command, args []string) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
+
+	logger.Info("Configuration loaded",
+		"n3_endpoints", len(cfg.N3RPCEndpoints),
+		"neox_endpoints", len(cfg.NeoXRPCEndpoints),
+		"db_path", cfg.DBPath,
+	)
 
 	if err := os.MkdirAll(cfg.DBPath, 0o755); err != nil {
 		return fmt.Errorf("failed to create database directory: %w", err)
@@ -57,8 +69,94 @@ func run(cmd *cobra.Command, args []string) error {
 			logger.Error("Failed to close datastore", "error", closeErr)
 		}
 	}()
+	opStore := datastore.NewOperationStore(store)
+	logger.Info("Database initialized", "path", cfg.DBPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	n3Client, err := n3.NewClient(ctx, cfg.N3RPCEndpoints, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create Neo N3 client: %w", err)
+	}
+	defer n3Client.Close()
+
+	neoxClient, err := neox.NewClient(ctx, cfg.NeoXRPCEndpoints, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create Neo X client: %w", err)
+	}
+	defer neoxClient.Close()
+
+	n3EventProc, err := indexer.NewN3EventProcessor(
+		opStore,
+		strings.TrimPrefix(cfg.N3NeoXBridge, "0x"),
+		strings.TrimPrefix(cfg.N3MessageBridge, "0x"),
+		logger,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create N3 event processor: %w", err)
+	}
+	n3Contracts := []string{
+		strings.TrimPrefix(cfg.N3NeoXBridge, "0x"),
+		strings.TrimPrefix(cfg.N3MessageBridge, "0x"),
+	}
+	n3Indexer, err := indexer.NewN3Indexer(n3Client, store, opStore, n3EventProc, n3Contracts, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create N3 indexer: %w", err)
+	}
+
+	neoxEventProc := indexer.NewNeoXEventProcessor(opStore, store, cfg.NeoXTokenBridge, cfg.NeoXMessageBridge, logger)
+	neoxContracts := []string{cfg.NeoXTokenBridge, cfg.NeoXMessageBridge}
+	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, neoxEventProc, neoxContracts, logger)
+
+	var alerters []alerter.Alerter
+	if cfg.DiscordConfigured() {
+		alerters = append(alerters, alerter.NewDiscordAlerter(cfg.DiscordWebhookURL))
+		logger.Info("Discord alerting enabled")
+	}
+	if cfg.SMTPConfigured() {
+		alerters = append(alerters, alerter.NewEmailAlerter(
+			cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPFrom, cfg.AlertRecipients,
+		))
+		logger.Info("Email alerting enabled")
+	}
+	if len(alerters) == 0 {
+		alerters = append(alerters, &alerter.NoopAlerter{})
+		logger.Info("No alerting channels configured, using noop")
+	}
+	multiAlerter := alerter.NewMultiAlerter(alerters...)
+
+	pauseDetector := monitor.NewPauseDetector(store, logger)
+	stuckDetector := monitor.NewStuckDetector(opStore, multiAlerter, cfg.StuckThreshold, logger)
+	healthAgg := monitor.NewHealthAggregator(opStore, pauseDetector, logger)
+	mon := monitor.NewMonitor(stuckDetector, pauseDetector, healthAgg, logger)
 
 	e := echo.New()
+	e.HideBanner = true
+	handler := api.NewHandler(store, opStore, healthAgg)
+	api.RegisterRoutes(e, handler)
+	logger.Info("API routes registered")
+
+	go func() {
+		logger.Info("Starting N3 indexer")
+		if idxErr := n3Indexer.Start(ctx); idxErr != nil {
+			logger.Error("N3 indexer error", "error", idxErr)
+		}
+	}()
+
+	go func() {
+		logger.Info("Starting NeoX indexer")
+		if idxErr := neoxIndexer.Start(ctx); idxErr != nil {
+			logger.Error("NeoX indexer error", "error", idxErr)
+		}
+	}()
+
+	go func() {
+		logger.Info("Starting monitor")
+		if monErr := mon.Start(ctx); monErr != nil {
+			logger.Error("Monitor error", "error", monErr)
+		}
+	}()
 
 	addr := ":" + cfg.ServerPort
 	srv := &http.Server{
@@ -85,8 +183,10 @@ func run(cmd *cobra.Command, args []string) error {
 		logger.Error("Server failed", "error", serveErr)
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	cancel()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 	if shutdownErr := srv.Shutdown(shutdownCtx); shutdownErr != nil {
 		logger.Error("Shutdown error", "error", shutdownErr)
 	}
