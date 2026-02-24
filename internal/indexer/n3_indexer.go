@@ -19,21 +19,11 @@ const (
 	n3PollInterval = 15 * time.Second
 )
 
-type N3EventProcessor interface {
-	ProcessNotifications(ctx context.Context, blockHeight uint32, txHash string, notifications []N3Notification) ([]*types.BridgeOperation, error)
-}
-
-type N3Notification struct {
-	ContractHash util.Uint160
-	EventName    string
-	Items        []interface{}
-}
-
 type N3Indexer struct {
 	client    *n3.Client
 	store     *datastore.Store
 	opStore   *datastore.OperationStore
-	processor N3EventProcessor
+	processor *N3EventProcessorImpl
 	contracts []util.Uint160
 	logger    *slog.Logger
 }
@@ -42,7 +32,7 @@ func NewN3Indexer(
 	client *n3.Client,
 	store *datastore.Store,
 	opStore *datastore.OperationStore,
-	processor N3EventProcessor,
+	processor *N3EventProcessorImpl,
 	contractHashes []string,
 	logger *slog.Logger,
 ) (*N3Indexer, error) {
@@ -151,14 +141,23 @@ func (idx *N3Indexer) processBlock(ctx context.Context, height uint32) error {
 					continue
 				}
 
-				// The event processor will be implemented in Task 7.
-				// For now we just log that we found a bridge event.
-				idx.logger.Debug("Found bridge event",
-					"contract", event.ScriptHash.StringLE(),
-					"event", event.Name,
-					"tx", txHash.StringLE(),
-					"height", height,
-				)
+				if idx.processor == nil {
+					continue
+				}
+
+				blockTime := time.Unix(int64(blk.Timestamp), 0)
+				op, err := idx.processor.ProcessEvent(event, height, txHash.StringLE(), blockTime)
+				if err != nil {
+					idx.logger.Warn("Failed to process event",
+						"event", event.Name,
+						"tx", txHash.StringLE(),
+						"error", err,
+					)
+					continue
+				}
+				if op != nil {
+					allOps = append(allOps, op)
+				}
 			}
 		}
 	}
