@@ -48,13 +48,12 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	store, err := datastore.NewBadgerDbStore(datastore.NewDbOptions(&cfg.DBPath), logger)
+	store, err := datastore.NewStore(cfg.DBPath, logger)
 	if err != nil {
 		return fmt.Errorf("failed to initialize BadgerDB: %w", err)
 	}
-	ds := datastore.NewDataStore(store)
 	defer func() {
-		if closeErr := ds.Close(); closeErr != nil {
+		if closeErr := store.Close(); closeErr != nil {
 			logger.Error("Failed to close datastore", "error", closeErr)
 		}
 	}()
