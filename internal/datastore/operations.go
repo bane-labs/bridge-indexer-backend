@@ -189,3 +189,23 @@ func (os *OperationStore) DeleteOperation(bt types.BridgeType, dir types.Directi
 		{Key: idxKey, Value: nil},
 	})
 }
+
+func (os *OperationStore) MarkStuck(bt types.BridgeType, dir types.Direction, nonce uint64) error {
+	op, err := os.GetOperation(bt, dir, nonce)
+	if err != nil {
+		return err
+	}
+
+	oldStatus := op.Status
+	op.Status = types.StatusStuck
+
+	opKey := operationKey(bt, dir, nonce)
+	oldIdxKey := statusIndexKey(oldStatus, bt, dir, nonce)
+	newIdxKey := statusIndexKey(types.StatusStuck, bt, dir, nonce)
+
+	return os.store.BatchWrite([]WriteOp{
+		{Key: opKey, Value: op},
+		{Key: oldIdxKey, Value: nil},
+		{Key: newIdxKey, Value: []byte{}},
+	})
+}
