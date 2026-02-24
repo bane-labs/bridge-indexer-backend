@@ -22,24 +22,11 @@ const (
 	neoxMaxBlockRange = 500
 )
 
-type NeoXEventProcessor interface {
-	ProcessLogs(ctx context.Context, logs []NeoXLog) ([]*types.BridgeOperation, error)
-}
-
-type NeoXLog struct {
-	Address     common.Address
-	Topics      []common.Hash
-	Data        []byte
-	BlockNumber uint64
-	TxHash      common.Hash
-	Removed     bool
-}
-
 type NeoXIndexer struct {
 	client    *neox.Client
 	store     *datastore.Store
 	opStore   *datastore.OperationStore
-	processor NeoXEventProcessor
+	processor *NeoXEventProcessorImpl
 	contracts []common.Address
 	logger    *slog.Logger
 }
@@ -48,7 +35,7 @@ func NewNeoXIndexer(
 	client *neox.Client,
 	store *datastore.Store,
 	opStore *datastore.OperationStore,
-	processor NeoXEventProcessor,
+	processor *NeoXEventProcessorImpl,
 	contractAddresses []string,
 	logger *slog.Logger,
 ) *NeoXIndexer {
@@ -123,6 +110,12 @@ func (idx *NeoXIndexer) run(ctx context.Context, startHeight uint64) error {
 }
 
 func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) error {
+	header, err := idx.client.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
+	if err != nil {
+		return fmt.Errorf("get header %d: %w", to, err)
+	}
+	blockTime := time.Unix(int64(header.Time), 0)
+
 	query := ethereum.FilterQuery{
 		FromBlock: new(big.Int).SetUint64(from),
 		ToBlock:   new(big.Int).SetUint64(to),
@@ -134,6 +127,8 @@ func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) 
 		return fmt.Errorf("filter logs %d-%d: %w", from, to, err)
 	}
 
+	var allOps []*types.BridgeOperation
+
 	for _, l := range logs {
 		if l.Removed {
 			idx.logger.Warn("Reorg detected: removed log",
@@ -143,16 +138,28 @@ func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) 
 			continue
 		}
 
-		idx.logger.Debug("Found NeoX bridge event",
-			"address", l.Address.Hex(),
-			"block", l.BlockNumber,
-			"tx", l.TxHash.Hex(),
-		)
-	}
+		if idx.processor == nil {
+			continue
+		}
 
-	header, err := idx.client.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
-	if err != nil {
-		return fmt.Errorf("get header %d: %w", to, err)
+		op, pauseState, err := idx.processor.ProcessLog(l, blockTime)
+		if err != nil {
+			idx.logger.Warn("Failed to process log",
+				"tx", l.TxHash.Hex(),
+				"error", err,
+			)
+			continue
+		}
+		if op != nil {
+			allOps = append(allOps, op)
+		}
+		if pauseState != nil {
+			idx.logger.Info("Bridge pause state change",
+				"bridge_type", pauseState.BridgeType,
+				"paused", pauseState.Paused,
+				"scope", pauseState.Scope,
+			)
+		}
 	}
 
 	newState := &types.IndexerState{
@@ -163,8 +170,14 @@ func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) 
 		UpdatedAt:       time.Now(),
 	}
 
-	if err := idx.store.SaveIndexerState(newState); err != nil {
-		return fmt.Errorf("save state: %w", err)
+	if len(allOps) > 0 {
+		if err := idx.store.SaveIndexerStateWithOperations(newState, allOps); err != nil {
+			return fmt.Errorf("save state with ops: %w", err)
+		}
+	} else {
+		if err := idx.store.SaveIndexerState(newState); err != nil {
+			return fmt.Errorf("save state: %w", err)
+		}
 	}
 
 	if to%1000 == 0 || to == from {
