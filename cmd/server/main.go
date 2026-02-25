@@ -26,6 +26,13 @@ import (
 	"github.com/bane-labs/bridge-indexer-backend/pkg/neox"
 )
 
+// @title           Bridge Indexer API
+// @version         1.0
+// @description     API for monitoring cross-chain bridge operations between Neo N3 and NeoX.
+// @host            localhost:8080
+// @BasePath        /
+// @schemes         http
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "bridge-indexer",
