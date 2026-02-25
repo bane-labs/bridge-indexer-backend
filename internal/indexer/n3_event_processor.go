@@ -65,10 +65,14 @@ func (p *N3EventProcessorImpl) processNeoXBridgeEvent(
 	blockTime time.Time,
 ) (*types.BridgeOperation, error) {
 	switch event.Name {
-	case "Deposit":
-		return p.handleN3Deposit(event, blockHeight, txHash, blockTime)
-	case "Withdrawal", "WithdrawCompleted":
-		return p.handleN3WithdrawalComplete(event, blockHeight, txHash, blockTime)
+	case "NativeDeposit":
+		return p.handleNativeDeposit(event, blockHeight, txHash, blockTime)
+	case "TokenDeposit":
+		return p.handleTokenDeposit(event, blockHeight, txHash, blockTime)
+	case "NativeWithdrawal":
+		return p.handleNativeWithdrawalComplete(event, blockHeight, txHash, blockTime)
+	case "TokenWithdrawal":
+		return p.handleTokenWithdrawalComplete(event, blockHeight, txHash, blockTime)
 	default:
 		return nil, nil
 	}
@@ -83,14 +87,16 @@ func (p *N3EventProcessorImpl) processMessageBridgeEvent(
 	switch event.Name {
 	case "MessageSend":
 		return p.handleN3MessageSend(event, blockHeight, txHash, blockTime)
-	case "MessageExecuted":
-		return p.handleN3MessageExecuted(event, blockHeight, txHash, blockTime)
+	case "Execution":
+		return p.handleN3Execution(event, blockHeight, txHash, blockTime)
 	default:
 		return nil, nil
 	}
 }
 
-func (p *N3EventProcessorImpl) handleN3Deposit(
+// handleNativeDeposit processes NativeDeposit events from the NeoXBridge contract.
+// Contract event: NativeDeposit(Nonce int, Recipient Hash160, Amount int, Depositor Hash160, DepositHash ByteArray, NewDepositRoot ByteArray)
+func (p *N3EventProcessorImpl) handleNativeDeposit(
 	event state.NotificationEvent,
 	blockHeight uint32,
 	txHash string,
@@ -98,51 +104,44 @@ func (p *N3EventProcessorImpl) handleN3Deposit(
 ) (*types.BridgeOperation, error) {
 	items, err := getArrayItems(event.Item)
 	if err != nil {
-		return nil, fmt.Errorf("Deposit event: %w", err)
+		return nil, fmt.Errorf("NativeDeposit event: %w", err)
 	}
 	if len(items) < 4 {
-		return nil, fmt.Errorf("Deposit event: expected >= 4 items, got %d", len(items))
+		return nil, fmt.Errorf("NativeDeposit event: expected >= 4 items, got %d", len(items))
 	}
 
+	// items[0] = Nonce
 	nonce, err := itemToUint64(items[0])
 	if err != nil {
-		return nil, fmt.Errorf("Deposit nonce: %w", err)
+		return nil, fmt.Errorf("NativeDeposit nonce: %w", err)
 	}
 
+	// items[1] = Recipient (20-byte Hash160)
 	to, err := itemToAddressString(items[1])
 	if err != nil {
-		return nil, fmt.Errorf("Deposit to: %w", err)
+		return nil, fmt.Errorf("NativeDeposit recipient: %w", err)
 	}
 
+	// items[2] = Amount
 	amount, err := itemToBigIntString(items[2])
 	if err != nil {
-		return nil, fmt.Errorf("Deposit amount: %w", err)
+		return nil, fmt.Errorf("NativeDeposit amount: %w", err)
 	}
 
+	// items[3] = Depositor (20-byte Hash160)
 	from, err := itemToAddressString(items[3])
 	if err != nil {
-		return nil, fmt.Errorf("Deposit from: %w", err)
-	}
-
-	bridgeType := types.BridgeTypeNative
-	var tokenContract *string
-	if len(items) >= 7 {
-		tc, tcErr := itemToHexString(items[6])
-		if tcErr == nil && tc != "" {
-			bridgeType = types.BridgeTypeToken
-			tokenContract = &tc
-		}
+		return nil, fmt.Errorf("NativeDeposit depositor: %w", err)
 	}
 
 	op := &types.BridgeOperation{
-		BridgeType:        bridgeType,
+		BridgeType:        types.BridgeTypeNative,
 		Direction:         types.DirectionDeposit,
 		Nonce:             nonce,
 		SourceChain:       chainN3,
 		DestinationChain:  chainNeoX,
 		SourceBlockHeight: uint64(blockHeight),
 		SourceTxHash:      txHash,
-		TokenContract:     tokenContract,
 		Amount:            &amount,
 		FromAddress:       from,
 		ToAddress:         to,
@@ -153,7 +152,9 @@ func (p *N3EventProcessorImpl) handleN3Deposit(
 	return op, nil
 }
 
-func (p *N3EventProcessorImpl) handleN3WithdrawalComplete(
+// handleTokenDeposit processes TokenDeposit events from the NeoXBridge contract.
+// Contract event: TokenDeposit(NeoN3Token Hash160, NeoXToken Hash160, Nonce int, Recipient Hash160, Value int, Depositor Hash160, DepositHash ByteArray, NewDepositRoot ByteArray)
+func (p *N3EventProcessorImpl) handleTokenDeposit(
 	event state.NotificationEvent,
 	blockHeight uint32,
 	txHash string,
@@ -161,33 +162,137 @@ func (p *N3EventProcessorImpl) handleN3WithdrawalComplete(
 ) (*types.BridgeOperation, error) {
 	items, err := getArrayItems(event.Item)
 	if err != nil {
-		return nil, fmt.Errorf("Withdrawal event: %w", err)
+		return nil, fmt.Errorf("TokenDeposit event: %w", err)
+	}
+	if len(items) < 6 {
+		return nil, fmt.Errorf("TokenDeposit event: expected >= 6 items, got %d", len(items))
+	}
+
+	// items[0] = NeoN3Token (20-byte Hash160)
+	tokenContract, err := itemToAddressString(items[0])
+	if err != nil {
+		return nil, fmt.Errorf("TokenDeposit token: %w", err)
+	}
+
+	// items[1] = NeoXToken (skipped for indexing, used for cross-chain mapping)
+
+	// items[2] = Nonce
+	nonce, err := itemToUint64(items[2])
+	if err != nil {
+		return nil, fmt.Errorf("TokenDeposit nonce: %w", err)
+	}
+
+	// items[3] = Recipient (20-byte Hash160)
+	to, err := itemToAddressString(items[3])
+	if err != nil {
+		return nil, fmt.Errorf("TokenDeposit recipient: %w", err)
+	}
+
+	// items[4] = Value
+	amount, err := itemToBigIntString(items[4])
+	if err != nil {
+		return nil, fmt.Errorf("TokenDeposit value: %w", err)
+	}
+
+	// items[5] = Depositor (20-byte Hash160)
+	from, err := itemToAddressString(items[5])
+	if err != nil {
+		return nil, fmt.Errorf("TokenDeposit depositor: %w", err)
+	}
+
+	op := &types.BridgeOperation{
+		BridgeType:        types.BridgeTypeToken,
+		Direction:         types.DirectionDeposit,
+		Nonce:             nonce,
+		SourceChain:       chainN3,
+		DestinationChain:  chainNeoX,
+		SourceBlockHeight: uint64(blockHeight),
+		SourceTxHash:      txHash,
+		TokenContract:     &tokenContract,
+		Amount:            &amount,
+		FromAddress:       from,
+		ToAddress:         to,
+		Timestamp:         blockTime,
+		Status:            types.StatusPending,
+	}
+
+	return op, nil
+}
+
+// handleNativeWithdrawalComplete processes NativeWithdrawal events (withdrawal completion on N3 side).
+// Contract event: NativeWithdrawal(Nonce int, Recipient Hash160, Amount int)
+func (p *N3EventProcessorImpl) handleNativeWithdrawalComplete(
+	event state.NotificationEvent,
+	blockHeight uint32,
+	txHash string,
+	blockTime time.Time,
+) (*types.BridgeOperation, error) {
+	items, err := getArrayItems(event.Item)
+	if err != nil {
+		return nil, fmt.Errorf("NativeWithdrawal event: %w", err)
 	}
 	if len(items) < 1 {
-		return nil, fmt.Errorf("Withdrawal event: expected >= 1 items, got %d", len(items))
+		return nil, fmt.Errorf("NativeWithdrawal event: expected >= 1 items, got %d", len(items))
 	}
 
 	nonce, err := itemToUint64(items[0])
 	if err != nil {
-		return nil, fmt.Errorf("Withdrawal nonce: %w", err)
+		return nil, fmt.Errorf("NativeWithdrawal nonce: %w", err)
 	}
 
 	destBlock := uint64(blockHeight)
-	for _, bt := range []types.BridgeType{types.BridgeTypeNative, types.BridgeTypeToken} {
-		err := p.opStore.UpdateOperationCompletion(
-			bt, types.DirectionWithdrawal, nonce,
-			destBlock, txHash, blockTime,
-		)
-		if err == nil {
-			p.logger.Info("Completed withdrawal via N3", "bridge_type", bt, "nonce", nonce)
-			return nil, nil
-		}
+	err = p.opStore.UpdateOperationCompletion(
+		types.BridgeTypeNative, types.DirectionWithdrawal, nonce,
+		destBlock, txHash, blockTime,
+	)
+	if err == nil {
+		p.logger.Info("Completed native withdrawal via N3", "nonce", nonce)
+	} else {
+		p.logger.Debug("No pending native withdrawal found for nonce", "nonce", nonce)
 	}
 
-	p.logger.Debug("No pending withdrawal found for nonce", "nonce", nonce)
 	return nil, nil
 }
 
+// handleTokenWithdrawalComplete processes TokenWithdrawal events (withdrawal completion on N3 side).
+// Contract event: TokenWithdrawal(NeoN3Token Hash160, Nonce int, Recipient Hash160, Value int)
+func (p *N3EventProcessorImpl) handleTokenWithdrawalComplete(
+	event state.NotificationEvent,
+	blockHeight uint32,
+	txHash string,
+	blockTime time.Time,
+) (*types.BridgeOperation, error) {
+	items, err := getArrayItems(event.Item)
+	if err != nil {
+		return nil, fmt.Errorf("TokenWithdrawal event: %w", err)
+	}
+	if len(items) < 2 {
+		return nil, fmt.Errorf("TokenWithdrawal event: expected >= 2 items, got %d", len(items))
+	}
+
+	// items[0] = NeoN3Token (skip)
+	// items[1] = Nonce
+	nonce, err := itemToUint64(items[1])
+	if err != nil {
+		return nil, fmt.Errorf("TokenWithdrawal nonce: %w", err)
+	}
+
+	destBlock := uint64(blockHeight)
+	err = p.opStore.UpdateOperationCompletion(
+		types.BridgeTypeToken, types.DirectionWithdrawal, nonce,
+		destBlock, txHash, blockTime,
+	)
+	if err == nil {
+		p.logger.Info("Completed token withdrawal via N3", "nonce", nonce)
+	} else {
+		p.logger.Debug("No pending token withdrawal found for nonce", "nonce", nonce)
+	}
+
+	return nil, nil
+}
+
+// handleN3MessageSend processes MessageSend events from the MessageBridge contract.
+// Contract event: MessageSend(Nonce int, Metadata ByteArray, Message ByteArray, MessageHash ByteArray, NeoToEvmRoot ByteArray)
 func (p *N3EventProcessorImpl) handleN3MessageSend(
 	event state.NotificationEvent,
 	blockHeight uint32,
@@ -198,19 +303,19 @@ func (p *N3EventProcessorImpl) handleN3MessageSend(
 	if err != nil {
 		return nil, fmt.Errorf("MessageSend event: %w", err)
 	}
-	if len(items) < 2 {
-		return nil, fmt.Errorf("MessageSend event: expected >= 2 items, got %d", len(items))
+	if len(items) < 1 {
+		return nil, fmt.Errorf("MessageSend event: expected >= 1 items, got %d", len(items))
 	}
 
+	// items[0] = Nonce
 	nonce, err := itemToUint64(items[0])
 	if err != nil {
 		return nil, fmt.Errorf("MessageSend nonce: %w", err)
 	}
 
-	from, err := itemToAddressString(items[1])
-	if err != nil {
-		from = "unknown"
-	}
+	// items[1] = Metadata (encoded bytes, not a sender address)
+	// The sender is embedded within the metadata; we don't parse it here.
+	from := "unknown"
 
 	op := &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeMessage,
@@ -229,7 +334,9 @@ func (p *N3EventProcessorImpl) handleN3MessageSend(
 	return op, nil
 }
 
-func (p *N3EventProcessorImpl) handleN3MessageExecuted(
+// handleN3Execution processes Execution events from the MessageBridge contract (message withdrawal completion).
+// Contract event: Execution(Nonce int, NumberOfChunks int, Index int, Result Any)
+func (p *N3EventProcessorImpl) handleN3Execution(
 	event state.NotificationEvent,
 	blockHeight uint32,
 	txHash string,
@@ -237,15 +344,16 @@ func (p *N3EventProcessorImpl) handleN3MessageExecuted(
 ) (*types.BridgeOperation, error) {
 	items, err := getArrayItems(event.Item)
 	if err != nil {
-		return nil, fmt.Errorf("MessageExecuted event: %w", err)
+		return nil, fmt.Errorf("Execution event: %w", err)
 	}
 	if len(items) < 1 {
-		return nil, fmt.Errorf("MessageExecuted event: expected >= 1 items, got %d", len(items))
+		return nil, fmt.Errorf("Execution event: expected >= 1 items, got %d", len(items))
 	}
 
+	// items[0] = Nonce
 	nonce, err := itemToUint64(items[0])
 	if err != nil {
-		return nil, fmt.Errorf("MessageExecuted nonce: %w", err)
+		return nil, fmt.Errorf("Execution nonce: %w", err)
 	}
 
 	destBlock := uint64(blockHeight)
@@ -259,6 +367,8 @@ func (p *N3EventProcessorImpl) handleN3MessageExecuted(
 
 	return nil, nil
 }
+
+// --- Helper functions ---
 
 func getArrayItems(item *stackitem.Array) ([]stackitem.Item, error) {
 	if item == nil {

@@ -75,7 +75,11 @@ func run(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	n3Client, err := n3.NewClient(ctx, cfg.N3RPCEndpoints, logger)
+	n3PoolSize := cfg.N3SyncConcurrency
+	if n3PoolSize > 500 {
+		n3PoolSize = 500
+	}
+	n3Client, err := n3.NewClient(ctx, cfg.N3RPCEndpoints, n3PoolSize, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create Neo N3 client: %w", err)
 	}
@@ -100,14 +104,14 @@ func run(cmd *cobra.Command, args []string) error {
 		strings.TrimPrefix(cfg.N3NeoXBridge, "0x"),
 		strings.TrimPrefix(cfg.N3MessageBridge, "0x"),
 	}
-	n3Indexer, err := indexer.NewN3Indexer(n3Client, store, opStore, n3EventProc, n3Contracts, logger)
+	n3Indexer, err := indexer.NewN3Indexer(n3Client, store, opStore, n3EventProc, n3Contracts, cfg.N3StartBlock, cfg.N3SyncConcurrency, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create N3 indexer: %w", err)
 	}
 
 	neoxEventProc := indexer.NewNeoXEventProcessor(opStore, store, cfg.NeoXTokenBridge, cfg.NeoXMessageBridge, logger)
 	neoxContracts := []string{cfg.NeoXTokenBridge, cfg.NeoXMessageBridge}
-	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, neoxEventProc, neoxContracts, logger)
+	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, neoxEventProc, neoxContracts, cfg.NeoXStartBlock, cfg.NeoXSyncConcurrency, logger)
 
 	var alerters []alerter.Alerter
 	if cfg.DiscordConfigured() {

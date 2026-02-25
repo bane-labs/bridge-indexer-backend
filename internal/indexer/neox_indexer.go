@@ -16,19 +16,22 @@ import (
 )
 
 const (
-	chainNeoX         = "neo_x"
-	neoxPollInterval  = 3 * time.Second
-	neoxSafetyDepth   = 20
-	neoxMaxBlockRange = 500
+	chainNeoX                     = "neo_x"
+	neoxPollInterval              = 3 * time.Second
+	neoxSafetyDepth        uint64 = 20
+	neoxMaxBlockRange      uint64 = 5000
+	neoxCheckpointInterval        = 50 // flush checkpoint every N no-op ranges
 )
 
 type NeoXIndexer struct {
-	client    *neox.Client
-	store     *datastore.Store
-	opStore   *datastore.OperationStore
-	processor *NeoXEventProcessorImpl
-	contracts []common.Address
-	logger    *slog.Logger
+	client      *neox.Client
+	store       *datastore.Store
+	opStore     *datastore.OperationStore
+	processor   *NeoXEventProcessorImpl
+	contracts   []common.Address
+	startBlock  uint64
+	concurrency int
+	logger      *slog.Logger
 }
 
 func NewNeoXIndexer(
@@ -37,15 +40,22 @@ func NewNeoXIndexer(
 	opStore *datastore.OperationStore,
 	processor *NeoXEventProcessorImpl,
 	contractAddresses []string,
+	startBlock uint64,
+	concurrency int,
 	logger *slog.Logger,
 ) *NeoXIndexer {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
 	return &NeoXIndexer{
-		client:    client,
-		store:     store,
-		opStore:   opStore,
-		processor: processor,
-		contracts: neox.HexToAddresses(contractAddresses),
-		logger:    logger,
+		client:      client,
+		store:       store,
+		opStore:     opStore,
+		processor:   processor,
+		contracts:   neox.HexToAddresses(contractAddresses),
+		startBlock:  startBlock,
+		concurrency: concurrency,
+		logger:      logger,
 	}
 }
 
@@ -60,13 +70,18 @@ func (idx *NeoXIndexer) Start(ctx context.Context) error {
 		startHeight = state.LastBlockHeight + 1
 		idx.logger.Info("Resuming NeoX indexer", "from_height", startHeight)
 	} else {
-		idx.logger.Info("Starting NeoX indexer from genesis")
+		startHeight = idx.startBlock
+		idx.logger.Info("Starting NeoX indexer", "from_height", startHeight)
 	}
 
-	return idx.run(ctx, startHeight)
+	if idx.concurrency <= 1 {
+		return idx.runSerial(ctx, startHeight)
+	}
+	return idx.runParallel(ctx, startHeight)
 }
 
-func (idx *NeoXIndexer) run(ctx context.Context, startHeight uint64) error {
+// runSerial is the original serial loop (concurrency=1 fallback).
+func (idx *NeoXIndexer) runSerial(ctx context.Context, startHeight uint64) error {
 	height := startHeight
 
 	for {
@@ -109,13 +124,173 @@ func (idx *NeoXIndexer) run(ctx context.Context, startHeight uint64) error {
 	}
 }
 
-func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) error {
-	header, err := idx.client.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
-	if err != nil {
-		return fmt.Errorf("get header %d: %w", to, err)
-	}
-	blockTime := time.Unix(int64(header.Time), 0)
+// runParallel uses a sliding-window pipeline of concurrent FilterLogs requests.
+func (idx *NeoXIndexer) runParallel(ctx context.Context, startHeight uint64) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
+	type rangeResult struct {
+		from, to uint64
+		state    *types.IndexerState
+		ops      []*types.BridgeOperation
+		err      error
+		ready    chan struct{}
+	}
+
+	slots := make(chan *rangeResult, idx.concurrency*2)
+	sem := make(chan struct{}, idx.concurrency)
+
+	// Producer: carve block ranges and dispatch concurrent FilterLogs calls.
+	go func() {
+		defer close(slots)
+		height := startHeight
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			chainHeight, err := idx.client.BlockNumber(ctx)
+			if err != nil {
+				idx.logger.Error("Failed to get NeoX block number", "error", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(neoxPollInterval):
+				}
+				continue
+			}
+
+			safeHeight := uint64(0)
+			if chainHeight > neoxSafetyDepth {
+				safeHeight = chainHeight - neoxSafetyDepth
+			}
+			if height > safeHeight {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(neoxPollInterval):
+				}
+				continue
+			}
+
+			for height <= safeHeight {
+				select {
+				case <-ctx.Done():
+					return
+				case sem <- struct{}{}:
+				}
+
+				endHeight := height + neoxMaxBlockRange
+				if endHeight > safeHeight {
+					endHeight = safeHeight
+				}
+
+				r := &rangeResult{from: height, to: endHeight, ready: make(chan struct{})}
+				select {
+				case slots <- r:
+				case <-ctx.Done():
+					<-sem
+					return
+				}
+
+				go func(r *rangeResult) {
+					defer func() { <-sem }()
+					r.state, r.ops, r.err = idx.processBlockRangeWithResult(ctx, r.from, r.to)
+					close(r.ready)
+				}(r)
+
+				height = endHeight + 1
+			}
+		}
+	}()
+
+	// Consumer: drain results in order, write to datastore.
+	noOpCount := 0
+	var lastNoOpState *types.IndexerState
+
+	for r := range slots {
+		select {
+		case <-r.ready:
+		case <-ctx.Done():
+			idx.logger.Info("NeoX indexer stopping")
+			return nil
+		}
+
+		if r.err != nil {
+			idx.logger.Error("Failed to process NeoX block range", "from", r.from, "to", r.to, "error", r.err)
+			cancel()
+			for range slots {
+			}
+			return r.err
+		}
+
+		if len(r.ops) > 0 {
+			// Flush any pending no-op checkpoint first.
+			if lastNoOpState != nil {
+				if err := idx.store.SaveIndexerState(lastNoOpState); err != nil {
+					return fmt.Errorf("save noop checkpoint at %d: %w", lastNoOpState.LastBlockHeight, err)
+				}
+				noOpCount = 0
+				lastNoOpState = nil
+			}
+			if err := idx.store.SaveIndexerStateWithOperations(r.state, r.ops); err != nil {
+				return fmt.Errorf("save state with ops at %d: %w", r.to, err)
+			}
+			continue
+		}
+
+		// No-op range: batch checkpoints.
+		noOpCount++
+		lastNoOpState = r.state
+		if noOpCount >= neoxCheckpointInterval {
+			if err := idx.store.SaveIndexerState(lastNoOpState); err != nil {
+				return fmt.Errorf("save checkpoint at %d: %w", r.to, err)
+			}
+			noOpCount = 0
+			lastNoOpState = nil
+		}
+	}
+
+	// Flush final no-op checkpoint.
+	if lastNoOpState != nil {
+		if err := idx.store.SaveIndexerState(lastNoOpState); err != nil {
+			return fmt.Errorf("save final checkpoint: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// processBlockRange processes a single range (serial path). Writes to store directly.
+func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) error {
+	state, ops, err := idx.processBlockRangeWithResult(ctx, from, to)
+	if err != nil {
+		return err
+	}
+
+	if len(ops) > 0 {
+		if err := idx.store.SaveIndexerStateWithOperations(state, ops); err != nil {
+			return fmt.Errorf("save state with ops: %w", err)
+		}
+	} else {
+		if err := idx.store.SaveIndexerState(state); err != nil {
+			return fmt.Errorf("save state: %w", err)
+		}
+	}
+
+	if to%10000 == 0 || to == from {
+		idx.logger.Info("NeoX indexer progress", "height", to)
+	}
+
+	return nil
+}
+
+// processBlockRangeWithResult does FilterLogs + event processing without writing to store.
+// This is the core work unit used by both serial and parallel paths.
+func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, to uint64) (*types.IndexerState, []*types.BridgeOperation, error) {
 	query := ethereum.FilterQuery{
 		FromBlock: new(big.Int).SetUint64(from),
 		ToBlock:   new(big.Int).SetUint64(to),
@@ -124,65 +299,64 @@ func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) 
 
 	logs, err := idx.client.FilterLogs(ctx, query)
 	if err != nil {
-		return fmt.Errorf("filter logs %d-%d: %w", from, to, err)
+		return nil, nil, fmt.Errorf("filter logs %d-%d: %w", from, to, err)
 	}
 
 	var allOps []*types.BridgeOperation
 
-	for _, l := range logs {
-		if l.Removed {
-			idx.logger.Warn("Reorg detected: removed log",
-				"block", l.BlockNumber,
-				"tx", l.TxHash.Hex(),
-			)
-			continue
+	if len(logs) > 0 {
+		// Only fetch header when we have events (lazy header).
+		header, hErr := idx.client.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
+		if hErr != nil {
+			return nil, nil, fmt.Errorf("get header %d: %w", to, hErr)
 		}
+		blockTime := time.Unix(int64(header.Time), 0)
 
-		if idx.processor == nil {
-			continue
-		}
+		for _, l := range logs {
+			if l.Removed {
+				idx.logger.Warn("Reorg detected: removed log",
+					"block", l.BlockNumber,
+					"tx", l.TxHash.Hex(),
+				)
+				continue
+			}
 
-		op, pauseState, err := idx.processor.ProcessLog(l, blockTime)
-		if err != nil {
-			idx.logger.Warn("Failed to process log",
-				"tx", l.TxHash.Hex(),
-				"error", err,
-			)
-			continue
-		}
-		if op != nil {
-			allOps = append(allOps, op)
-		}
-		if pauseState != nil {
-			idx.logger.Info("Bridge pause state change",
-				"bridge_type", pauseState.BridgeType,
-				"paused", pauseState.Paused,
-				"scope", pauseState.Scope,
-			)
+			if idx.processor == nil {
+				continue
+			}
+
+			op, pauseState, pErr := idx.processor.ProcessLog(l, blockTime)
+			if pErr != nil {
+				idx.logger.Warn("Failed to process log",
+					"tx", l.TxHash.Hex(),
+					"error", pErr,
+				)
+				continue
+			}
+			if op != nil {
+				allOps = append(allOps, op)
+			}
+			if pauseState != nil {
+				idx.logger.Info("Bridge pause state change",
+					"bridge_type", pauseState.BridgeType,
+					"paused", pauseState.Paused,
+					"scope", pauseState.Scope,
+				)
+			}
 		}
 	}
 
 	newState := &types.IndexerState{
 		Chain:           chainNeoX,
 		LastBlockHeight: to,
-		LastBlockHash:   header.Hash().Hex(),
+		LastBlockHash:   "", // skip header fetch for no-op ranges
 		IsSyncing:       true,
 		UpdatedAt:       time.Now(),
 	}
 
-	if len(allOps) > 0 {
-		if err := idx.store.SaveIndexerStateWithOperations(newState, allOps); err != nil {
-			return fmt.Errorf("save state with ops: %w", err)
-		}
-	} else {
-		if err := idx.store.SaveIndexerState(newState); err != nil {
-			return fmt.Errorf("save state: %w", err)
-		}
-	}
-
-	if to%1000 == 0 || to == from {
+	if to%10000 == 0 {
 		idx.logger.Info("NeoX indexer progress", "height", to, "logs_in_range", len(logs))
 	}
 
-	return nil
+	return newState, allOps, nil
 }
