@@ -1,0 +1,12 @@
+basePath: /
+host: localhost:8080
+info:
+  contact: {}
+  description: API for monitoring cross-chain bridge operations between Neo N3 and
+    NeoX.
+  title: Bridge Indexer API
+  version: "1.0"
+paths: {}
+schemes:
+- http
+swagger: "2.0"

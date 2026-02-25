@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	echoSwagger "github.com/swaggo/echo-swagger"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/alerter"
 	"github.com/bane-labs/bridge-indexer-backend/internal/api"
@@ -24,6 +25,7 @@ import (
 	"github.com/bane-labs/bridge-indexer-backend/internal/monitor"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/n3"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/neox"
+	_ "github.com/bane-labs/bridge-indexer-backend/docs/swagger"
 )
 
 // @title           Bridge Indexer API
@@ -146,6 +148,7 @@ func run(cmd *cobra.Command, args []string) error {
 	e.HideBanner = true
 	handler := api.NewHandler(store, opStore, healthAgg)
 	api.RegisterRoutes(e, handler)
+	e.GET("/swagger/*", echoSwagger.WrapHandler)
 	logger.Info("API routes registered")
 
 	go func() {

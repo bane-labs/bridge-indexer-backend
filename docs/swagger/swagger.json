@@ -1,0 +1,227 @@
+{
+  "schemes": [
+    "http"
+  ],
+  "swagger": "2.0",
+  "info": {
+    "description": "API for monitoring cross-chain bridge operations between Neo N3 and NeoX.",
+    "title": "Bridge Indexer API",
+    "contact": {},
+    "version": "1.0"
+  },
+  "host": "localhost:8080",
+  "basePath": "/",
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Get overall bridge health",
+        "description": "Returns overall health status including per-bridge health summaries",
+        "tags": [
+          "health"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/health/bridges": {
+      "get": {
+        "summary": "Get per-bridge health details",
+        "description": "Returns health metrics for each bridge type (native, token, message)",
+        "tags": [
+          "health"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/health/delays": {
+      "get": {
+        "summary": "Get average completion delays",
+        "description": "Returns average completion times per bridge type for 24h and 7d windows",
+        "tags": [
+          "health"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/indexer/state": {
+      "get": {
+        "summary": "Get indexer sync state",
+        "description": "Returns current indexed block height and sync status for each chain",
+        "tags": [
+          "indexer"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/operations": {
+      "get": {
+        "summary": "List bridge operations",
+        "description": "Returns bridge operations with optional filtering by type, direction, status, and pagination",
+        "tags": [
+          "operations"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "bridge_type",
+            "in": "query",
+            "description": "Filter by bridge type",
+            "type": "string",
+            "enum": [
+              "native",
+              "token",
+              "message"
+            ]
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Filter by direction",
+            "type": "string",
+            "enum": [
+              "deposit",
+              "withdrawal"
+            ]
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by status",
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "stuck"
+            ]
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size (default: 50)",
+            "type": "integer"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Page offset (default: 0)",
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/operations/{nonce}": {
+      "get": {
+        "summary": "Get operations by nonce",
+        "description": "Returns all bridge operations matching the given nonce across all bridge types and directions",
+        "tags": [
+          "operations"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "nonce",
+            "in": "path",
+            "description": "Operation nonce",
+            "required": true,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "type": "object"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  }
+}
