@@ -37,25 +37,25 @@ type rawConfig struct {
 }
 
 type Config struct {
-	N3RPCEndpoints    []string
-	NeoXRPCEndpoints  []string
-	StuckThreshold    time.Duration
-	DiscordWebhookURL string
-	SMTPHost          string
-	SMTPPort          int
-	SMTPUser          string
-	SMTPPass          string
-	SMTPFrom          string
-	AlertRecipients   []string
-	ServerPort        string
-	DBPath            string
-	NeoXTokenBridge   string
-	NeoXMessageBridge string
-	N3NeoXBridge      string
-	N3MessageBridge   string
-	N3SyncConcurrency int
-	N3StartBlock      uint64
-	NeoXStartBlock    uint64
+	N3RPCEndpoints      []string
+	NeoXRPCEndpoints    []string
+	StuckThreshold      time.Duration
+	DiscordWebhookURL   string
+	SMTPHost            string
+	SMTPPort            int
+	SMTPUser            string
+	SMTPPass            string
+	SMTPFrom            string
+	AlertRecipients     []string
+	ServerPort          string
+	DBPath              string
+	NeoXTokenBridge     string
+	NeoXMessageBridge   string
+	N3NeoXBridge        string
+	N3MessageBridge     string
+	N3SyncConcurrency   int
+	N3StartBlock        uint64
+	NeoXStartBlock      uint64
 	NeoXSyncConcurrency int
 }
 
@@ -124,25 +124,25 @@ func Load(v *viper.Viper) (*Config, error) {
 	}
 
 	cfg := &Config{
-		N3RPCEndpoints:    parseCommaSeparated(raw.N3RPCEndpoints),
-		NeoXRPCEndpoints:  parseCommaSeparated(raw.NeoXRPCEndpoints),
-		StuckThreshold:    time.Duration(raw.StuckThresholdMinutes) * time.Minute,
-		DiscordWebhookURL: raw.DiscordWebhookURL,
-		SMTPHost:          raw.SMTPHost,
-		SMTPPort:          raw.SMTPPort,
-		SMTPUser:          raw.SMTPUser,
-		SMTPPass:          raw.SMTPPass,
-		SMTPFrom:          raw.SMTPFrom,
-		AlertRecipients:   parseCommaSeparated(raw.AlertRecipients),
-		ServerPort:        raw.ServerPort,
-		DBPath:            raw.DBPath,
-		NeoXTokenBridge:   raw.NeoXTokenBridge,
-		NeoXMessageBridge: raw.NeoXMessageBridge,
-		N3NeoXBridge:      raw.N3NeoXBridge,
-		N3MessageBridge:   raw.N3MessageBridge,
-		N3SyncConcurrency: raw.N3SyncConcurrency,
-		N3StartBlock:      uint64(raw.N3StartBlock),
-		NeoXStartBlock:    uint64(raw.NeoXStartBlock),
+		N3RPCEndpoints:      parseCommaSeparated(raw.N3RPCEndpoints),
+		NeoXRPCEndpoints:    parseCommaSeparated(raw.NeoXRPCEndpoints),
+		StuckThreshold:      time.Duration(raw.StuckThresholdMinutes) * time.Minute,
+		DiscordWebhookURL:   raw.DiscordWebhookURL,
+		SMTPHost:            raw.SMTPHost,
+		SMTPPort:            raw.SMTPPort,
+		SMTPUser:            raw.SMTPUser,
+		SMTPPass:            raw.SMTPPass,
+		SMTPFrom:            raw.SMTPFrom,
+		AlertRecipients:     parseCommaSeparated(raw.AlertRecipients),
+		ServerPort:          raw.ServerPort,
+		DBPath:              raw.DBPath,
+		NeoXTokenBridge:     raw.NeoXTokenBridge,
+		NeoXMessageBridge:   raw.NeoXMessageBridge,
+		N3NeoXBridge:        raw.N3NeoXBridge,
+		N3MessageBridge:     raw.N3MessageBridge,
+		N3SyncConcurrency:   raw.N3SyncConcurrency,
+		N3StartBlock:        uint64(raw.N3StartBlock),
+		NeoXStartBlock:      uint64(raw.NeoXStartBlock),
 		NeoXSyncConcurrency: raw.NeoXSyncConcurrency,
 	}
 

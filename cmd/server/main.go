@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/viper"
 	echoSwagger "github.com/swaggo/echo-swagger"
 
+	_ "github.com/bane-labs/bridge-indexer-backend/docs/swagger"
 	"github.com/bane-labs/bridge-indexer-backend/internal/alerter"
 	"github.com/bane-labs/bridge-indexer-backend/internal/api"
 	"github.com/bane-labs/bridge-indexer-backend/internal/config"
@@ -25,7 +26,6 @@ import (
 	"github.com/bane-labs/bridge-indexer-backend/internal/monitor"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/n3"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/neox"
-	_ "github.com/bane-labs/bridge-indexer-backend/docs/swagger"
 )
 
 // @title           Bridge Indexer API
