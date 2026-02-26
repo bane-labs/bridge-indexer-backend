@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -41,6 +42,13 @@ func main() {
 		Short: "Neo X <-> Neo N3 Bridge Indexer & Monitoring Backend",
 		RunE:  run,
 	}
+
+	backfillCmd := &cobra.Command{
+		Use:   "backfill",
+		Short: "Resolve stuck operations by querying target chains for completion events",
+		RunE:  runBackfill,
+	}
+	rootCmd.AddCommand(backfillCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -172,6 +180,94 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
+	// Auto-trigger backfill once both chains have caught up to chain tip.
+	go func() {
+		var backfillOnce sync.Once
+		const syncGapThreshold uint64 = 50
+		const requiredConsecutive = 3
+
+		n3ConsecutiveSynced := 0
+		neoxConsecutiveSynced := 0
+
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+
+			// Check NeoX sync gap.
+			neoxChainHeight, err := neoxClient.BlockNumber(ctx)
+			if err != nil {
+				logger.Warn("Auto-backfill: failed to get NeoX chain height", "error", err)
+				neoxConsecutiveSynced = 0
+				continue
+			}
+			neoxState, err := store.GetIndexerState("neo_x")
+			if err != nil {
+				if errors.Is(err, datastore.ErrNotFound) {
+					neoxConsecutiveSynced = 0
+					continue
+				}
+				logger.Warn("Auto-backfill: failed to get NeoX indexer state", "error", err)
+				neoxConsecutiveSynced = 0
+				continue
+			}
+			if neoxChainHeight-neoxState.LastBlockHeight < syncGapThreshold {
+				neoxConsecutiveSynced++
+			} else {
+				neoxConsecutiveSynced = 0
+			}
+
+			// Check N3 sync gap.
+			n3BlockCount, err := n3Client.GetBlockCount(ctx)
+			if err != nil {
+				logger.Warn("Auto-backfill: failed to get N3 chain height", "error", err)
+				n3ConsecutiveSynced = 0
+				continue
+			}
+			n3ChainHeight := uint64(n3BlockCount) - 1
+			n3State, err := store.GetIndexerState("neo_n3")
+			if err != nil {
+				if errors.Is(err, datastore.ErrNotFound) {
+					n3ConsecutiveSynced = 0
+					continue
+				}
+				logger.Warn("Auto-backfill: failed to get N3 indexer state", "error", err)
+				n3ConsecutiveSynced = 0
+				continue
+			}
+			if n3ChainHeight-n3State.LastBlockHeight < syncGapThreshold {
+				n3ConsecutiveSynced++
+			} else {
+				n3ConsecutiveSynced = 0
+			}
+
+			// Both chains synced for enough consecutive checks — run backfill once.
+			if neoxConsecutiveSynced >= requiredConsecutive && n3ConsecutiveSynced >= requiredConsecutive {
+				backfillOnce.Do(func() {
+					logger.Info("Both chains synced, running backfill...")
+					neoxContracts := []string{cfg.NeoXTokenBridge, cfg.NeoXMessageBridge}
+					n3Contracts := []string{
+						strings.TrimPrefix(cfg.N3NeoXBridge, "0x"),
+						strings.TrimPrefix(cfg.N3MessageBridge, "0x"),
+					}
+					bf := indexer.NewBackfiller(opStore, neoxClient, n3Client, neoxContracts, n3Contracts, logger)
+					resolved, bfErr := bf.Run(ctx)
+					if bfErr != nil {
+						logger.Error("Auto-backfill failed", "error", bfErr)
+						return
+					}
+					logger.Info("Auto-backfill complete", "resolved", resolved)
+				})
+				return
+			}
+		}
+	}()
+
 	addr := ":" + cfg.ServerPort
 	srv := &http.Server{
 		Addr:              addr,
@@ -206,5 +302,71 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	logger.Info("Bridge Indexer Backend stopped")
+	return nil
+}
+
+func runBackfill(cmd *cobra.Command, args []string) error {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	v := viper.New()
+	cfg, err := config.Load(v)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	logger.Info("Configuration loaded",
+		"n3_endpoints", len(cfg.N3RPCEndpoints),
+		"neox_endpoints", len(cfg.NeoXRPCEndpoints),
+		"db_path", cfg.DBPath,
+	)
+
+	if err := os.MkdirAll(cfg.DBPath, 0o755); err != nil {
+		return fmt.Errorf("failed to create database directory: %w", err)
+	}
+
+	store, err := datastore.NewStore(cfg.DBPath, logger)
+	if err != nil {
+		return fmt.Errorf("failed to initialize BadgerDB: %w", err)
+	}
+	defer func() {
+		if closeErr := store.Close(); closeErr != nil {
+			logger.Error("Failed to close datastore", "error", closeErr)
+		}
+	}()
+	opStore := datastore.NewOperationStore(store)
+	logger.Info("Database initialized", "path", cfg.DBPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	n3Client, err := n3.NewClient(ctx, cfg.N3RPCEndpoints, 100, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create Neo N3 client: %w", err)
+	}
+	defer n3Client.Close()
+
+	neoxClient, err := neox.NewClient(ctx, cfg.NeoXRPCEndpoints, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create Neo X client: %w", err)
+	}
+	defer neoxClient.Close()
+
+	neoxContracts := []string{cfg.NeoXTokenBridge, cfg.NeoXMessageBridge}
+
+	n3Contracts := []string{
+		strings.TrimPrefix(cfg.N3NeoXBridge, "0x"),
+		strings.TrimPrefix(cfg.N3MessageBridge, "0x"),
+	}
+
+	backfiller := indexer.NewBackfiller(opStore, neoxClient, n3Client, neoxContracts, n3Contracts, logger)
+	resolved, err := backfiller.Run(ctx)
+	if err != nil {
+		return fmt.Errorf("backfill failed: %w", err)
+	}
+
+	logger.Info("Backfill finished", "resolved", resolved)
 	return nil
 }

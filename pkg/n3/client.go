@@ -85,9 +85,10 @@ func (c *Client) pick() *rpcclient.Client {
 	return c.pool[idx]
 }
 
-// retry executes op with up to 2 retries, picking a different connection each time.
+// retry executes op with up to 5 retries using exponential backoff,
+// picking a different connection each time.
 func retry[T any](c *Client, ctx context.Context, op func(rpc *rpcclient.Client) (T, error)) (T, error) {
-	const maxRetries = 2
+	const maxRetries = 5
 	var lastErr error
 	var zero T
 
@@ -100,9 +101,10 @@ func retry[T any](c *Client, ctx context.Context, op func(rpc *rpcclient.Client)
 		lastErr = err
 
 		if attempt < maxRetries {
+			backoff := time.Duration(1<<attempt) * 500 * time.Millisecond // 500ms, 1s, 2s, 4s, 8s
 			c.logger.Warn("Neo N3 RPC call failed, retrying",
-				"attempt", attempt+1, "backoff", "50ms", "error", err)
-			time.Sleep(50 * time.Millisecond)
+				"attempt", attempt+1, "backoff", backoff, "error", err)
+			time.Sleep(backoff)
 		}
 	}
 	return zero, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
