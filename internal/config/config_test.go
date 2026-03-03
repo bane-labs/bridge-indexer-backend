@@ -388,4 +388,3 @@ func TestConfig_NegativeStartBlock(t *testing.T) {
 		})
 	}
 }
-

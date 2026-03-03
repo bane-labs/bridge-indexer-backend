@@ -26,13 +26,13 @@ const (
 )
 
 type NeoXIndexer struct {
-	client      *neox.Client
-	store       *datastore.Store
-	opStore     *datastore.OperationStore
-	processor   *NeoXEventProcessorImpl
-	contracts   []common.Address
-	startBlock  uint64
-	concurrency int
+	client        *neox.Client
+	store         *datastore.Store
+	opStore       *datastore.OperationStore
+	processor     *NeoXEventProcessorImpl
+	contracts     []common.Address
+	startBlock    uint64
+	concurrency   int
 	logger        *slog.Logger
 	pauseDetector *monitor.PauseDetector
 }
@@ -52,13 +52,13 @@ func NewNeoXIndexer(
 		concurrency = 1
 	}
 	return &NeoXIndexer{
-		client:      client,
-		store:       store,
-		opStore:     opStore,
-		processor:   processor,
-		contracts:   neox.HexToAddresses(contractAddresses),
-		startBlock:  startBlock,
-		concurrency: concurrency,
+		client:        client,
+		store:         store,
+		opStore:       opStore,
+		processor:     processor,
+		contracts:     neox.HexToAddresses(contractAddresses),
+		startBlock:    startBlock,
+		concurrency:   concurrency,
 		logger:        logger,
 		pauseDetector: pauseDetector,
 	}
