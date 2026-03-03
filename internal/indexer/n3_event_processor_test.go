@@ -42,7 +42,7 @@ func newTestProcessor(t *testing.T) (*N3EventProcessorImpl, *datastore.Operation
 	return proc, opStore
 }
 
-func TestN3_DepositNative(t *testing.T) {
+func TestN3_NativeDeposit(t *testing.T) {
 	proc, _ := newTestProcessor(t)
 
 	neoXBridge, _ := util.Uint160DecodeStringLE(testNeoXBridgeHash)
@@ -51,16 +51,17 @@ func TestN3_DepositNative(t *testing.T) {
 	fromAddr := make([]byte, 20)
 	fromAddr[0] = 0x02
 
+	// NativeDeposit(Nonce, Recipient, Amount, Depositor, DepositHash, NewDepositRoot)
 	event := state.NotificationEvent{
 		ScriptHash: neoXBridge,
-		Name:       "Deposit",
+		Name:       "NativeDeposit",
 		Item: stackitem.NewArray([]stackitem.Item{
-			intItem(42),                              // nonce
-			stackitem.NewByteArray(toAddr),           // to
-			intItem(1000000000),                      // amount
-			stackitem.NewByteArray(fromAddr),         // from
-			stackitem.NewByteArray(make([]byte, 32)), // depositHash
-			stackitem.NewByteArray(make([]byte, 32)), // newRoot
+			intItem(42),                              // Nonce
+			stackitem.NewByteArray(toAddr),           // Recipient
+			intItem(1000000000),                      // Amount
+			stackitem.NewByteArray(fromAddr),         // Depositor
+			stackitem.NewByteArray(make([]byte, 32)), // DepositHash
+			stackitem.NewByteArray(make([]byte, 32)), // NewDepositRoot
 		}),
 	}
 
@@ -86,28 +87,37 @@ func TestN3_DepositNative(t *testing.T) {
 	if op.Amount == nil || *op.Amount != "1000000000" {
 		t.Fatalf("expected amount 1000000000, got %v", op.Amount)
 	}
+	if op.TokenContract != nil {
+		t.Fatalf("expected nil token contract for native deposit")
+	}
 }
 
-func TestN3_DepositToken(t *testing.T) {
+func TestN3_TokenDeposit(t *testing.T) {
 	proc, _ := newTestProcessor(t)
 
 	neoXBridge, _ := util.Uint160DecodeStringLE(testNeoXBridgeHash)
+	neoN3Token := make([]byte, 20)
+	neoN3Token[0] = 0xAA
+	neoXToken := make([]byte, 20)
+	neoXToken[0] = 0xBB
 	toAddr := make([]byte, 20)
+	toAddr[0] = 0x01
 	fromAddr := make([]byte, 20)
-	tokenHash := make([]byte, 20)
-	tokenHash[0] = 0xAA
+	fromAddr[0] = 0x02
 
+	// TokenDeposit(NeoN3Token, NeoXToken, Nonce, Recipient, Value, Depositor, DepositHash, NewDepositRoot)
 	event := state.NotificationEvent{
 		ScriptHash: neoXBridge,
-		Name:       "Deposit",
+		Name:       "TokenDeposit",
 		Item: stackitem.NewArray([]stackitem.Item{
-			intItem(99),
-			stackitem.NewByteArray(toAddr),
-			intItem(500),
-			stackitem.NewByteArray(fromAddr),
-			stackitem.NewByteArray(make([]byte, 32)),
-			stackitem.NewByteArray(make([]byte, 32)),
-			stackitem.NewByteArray(tokenHash),
+			stackitem.NewByteArray(neoN3Token),       // NeoN3Token
+			stackitem.NewByteArray(neoXToken),        // NeoXToken
+			intItem(99),                              // Nonce
+			stackitem.NewByteArray(toAddr),           // Recipient
+			intItem(500),                             // Value
+			stackitem.NewByteArray(fromAddr),         // Depositor
+			stackitem.NewByteArray(make([]byte, 32)), // DepositHash
+			stackitem.NewByteArray(make([]byte, 32)), // NewDepositRoot
 		}),
 	}
 
@@ -121,8 +131,14 @@ func TestN3_DepositToken(t *testing.T) {
 	if op.BridgeType != types.BridgeTypeToken {
 		t.Fatalf("expected token, got %s", op.BridgeType)
 	}
+	if op.Nonce != 99 {
+		t.Fatalf("expected nonce 99, got %d", op.Nonce)
+	}
 	if op.TokenContract == nil {
 		t.Fatal("expected token contract")
+	}
+	if op.Amount == nil || *op.Amount != "500" {
+		t.Fatalf("expected amount 500, got %v", op.Amount)
 	}
 }
 
@@ -130,15 +146,17 @@ func TestN3_MessageSend(t *testing.T) {
 	proc, _ := newTestProcessor(t)
 
 	msgBridge, _ := util.Uint160DecodeStringLE(testMessageBridgeHash)
-	sender := make([]byte, 20)
-	sender[0] = 0x05
 
+	// MessageSend(Nonce, Metadata, Message, MessageHash, NeoToEvmRoot)
 	event := state.NotificationEvent{
 		ScriptHash: msgBridge,
 		Name:       "MessageSend",
 		Item: stackitem.NewArray([]stackitem.Item{
-			intItem(7),
-			stackitem.NewByteArray(sender),
+			intItem(7),                               // Nonce
+			stackitem.NewByteArray([]byte{0x01}),     // Metadata (encoded bytes)
+			stackitem.NewByteArray([]byte{0x02}),     // Message
+			stackitem.NewByteArray(make([]byte, 32)), // MessageHash
+			stackitem.NewByteArray(make([]byte, 32)), // NeoToEvmRoot
 		}),
 	}
 
@@ -155,9 +173,12 @@ func TestN3_MessageSend(t *testing.T) {
 	if op.Nonce != 7 {
 		t.Fatalf("expected nonce 7, got %d", op.Nonce)
 	}
+	if op.FromAddress != "unknown" {
+		t.Fatalf("expected from=unknown, got %s", op.FromAddress)
+	}
 }
 
-func TestN3_WithdrawalComplete(t *testing.T) {
+func TestN3_NativeWithdrawalComplete(t *testing.T) {
 	proc, opStore := newTestProcessor(t)
 
 	pendingOp := &types.BridgeOperation{
@@ -178,11 +199,17 @@ func TestN3_WithdrawalComplete(t *testing.T) {
 	}
 
 	neoXBridge, _ := util.Uint160DecodeStringLE(testNeoXBridgeHash)
+
+	// NativeWithdrawal(Nonce, Recipient, Amount)
+	toAddr := make([]byte, 20)
+	toAddr[0] = 0x01
 	event := state.NotificationEvent{
 		ScriptHash: neoXBridge,
-		Name:       "Withdrawal",
+		Name:       "NativeWithdrawal",
 		Item: stackitem.NewArray([]stackitem.Item{
-			intItem(10),
+			intItem(10),                    // Nonce
+			stackitem.NewByteArray(toAddr), // Recipient
+			intItem(1000000000),            // Amount
 		}),
 	}
 
@@ -200,6 +227,109 @@ func TestN3_WithdrawalComplete(t *testing.T) {
 	}
 	if got.DestTxHash == nil || *got.DestTxHash != "0xtxComplete" {
 		t.Fatalf("expected dest tx hash 0xtxComplete")
+	}
+}
+
+func TestN3_TokenWithdrawalComplete(t *testing.T) {
+	proc, opStore := newTestProcessor(t)
+
+	pendingOp := &types.BridgeOperation{
+		BridgeType:        types.BridgeTypeToken,
+		Direction:         types.DirectionWithdrawal,
+		Nonce:             20,
+		SourceChain:       chainNeoX,
+		DestinationChain:  chainN3,
+		SourceBlockHeight: 700,
+		SourceTxHash:      "0xsource",
+		FromAddress:       "0xfrom",
+		ToAddress:         "NTo",
+		Timestamp:         time.Now().Add(-5 * time.Minute),
+		Status:            types.StatusPending,
+	}
+	if err := opStore.SaveOperation(pendingOp); err != nil {
+		t.Fatalf("save pending: %v", err)
+	}
+
+	neoXBridge, _ := util.Uint160DecodeStringLE(testNeoXBridgeHash)
+
+	// TokenWithdrawal(NeoN3Token, Nonce, Recipient, Value)
+	tokenAddr := make([]byte, 20)
+	tokenAddr[0] = 0xCC
+	toAddr := make([]byte, 20)
+	toAddr[0] = 0x01
+	event := state.NotificationEvent{
+		ScriptHash: neoXBridge,
+		Name:       "TokenWithdrawal",
+		Item: stackitem.NewArray([]stackitem.Item{
+			stackitem.NewByteArray(tokenAddr), // NeoN3Token
+			intItem(20),                       // Nonce
+			stackitem.NewByteArray(toAddr),    // Recipient
+			intItem(5000),                     // Value
+		}),
+	}
+
+	_, err := proc.ProcessEvent(event, 800, "0xtxTokenComplete", time.Now())
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	got, err := opStore.GetOperation(types.BridgeTypeToken, types.DirectionWithdrawal, 20)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != types.StatusCompleted {
+		t.Fatalf("expected completed, got %s", got.Status)
+	}
+	if got.DestTxHash == nil || *got.DestTxHash != "0xtxTokenComplete" {
+		t.Fatalf("expected dest tx hash 0xtxTokenComplete")
+	}
+}
+
+func TestN3_Execution(t *testing.T) {
+	proc, opStore := newTestProcessor(t)
+
+	pendingOp := &types.BridgeOperation{
+		BridgeType:        types.BridgeTypeMessage,
+		Direction:         types.DirectionWithdrawal,
+		Nonce:             15,
+		SourceChain:       chainNeoX,
+		DestinationChain:  chainN3,
+		SourceBlockHeight: 900,
+		SourceTxHash:      "0xmsgSource",
+		FromAddress:       "0xfrom",
+		ToAddress:         "",
+		Timestamp:         time.Now().Add(-5 * time.Minute),
+		Status:            types.StatusPending,
+	}
+	if err := opStore.SaveOperation(pendingOp); err != nil {
+		t.Fatalf("save pending: %v", err)
+	}
+
+	msgBridge, _ := util.Uint160DecodeStringLE(testMessageBridgeHash)
+
+	// Execution(Nonce, NumberOfChunks, Index, Result)
+	event := state.NotificationEvent{
+		ScriptHash: msgBridge,
+		Name:       "Execution",
+		Item: stackitem.NewArray([]stackitem.Item{
+			intItem(15),                          // Nonce
+			intItem(1),                           // NumberOfChunks
+			intItem(0),                           // Index
+			stackitem.NewByteArray([]byte{0x01}), // Result
+		}),
+	}
+
+	_, err := proc.ProcessEvent(event, 1000, "0xtxExec", time.Now())
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	got, err := opStore.GetOperation(types.BridgeTypeMessage, types.DirectionWithdrawal, 15)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != types.StatusCompleted {
+		t.Fatalf("expected completed, got %s", got.Status)
 	}
 }
 
