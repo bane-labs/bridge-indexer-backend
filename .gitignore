@@ -63,6 +63,7 @@ badger/
 .env
 .env.local
 .env.*.local
+.env.integration
 
 # Temporary files
 tmp/
