@@ -359,11 +359,14 @@ func (idx *N3Indexer) processBlockWithResult(ctx context.Context, height uint32)
 	}
 	txResults := make([]txResult, len(blk.Transactions))
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, idx.concurrency)
 
 	for i, tx := range blk.Transactions {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(i int, tx *transaction.Transaction) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			// Pre-filter: skip transactions whose Script doesn't contain any watched contract hash
 			if !idx.txMayInvokeContracts(tx.Script, idx.contracts) {
 				return

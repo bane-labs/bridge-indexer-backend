@@ -356,3 +356,36 @@ func TestParseCommaSeparated(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_NegativeStartBlock(t *testing.T) {
+	tests := []struct {
+		name    string
+		n3      string
+		neox    string
+		wantErr string
+	}{
+		{"negative N3_START_BLOCK", "-1", "0", "N3_START_BLOCK must be >= 0"},
+		{"negative NEOX_START_BLOCK", "0", "-1", "NEOX_START_BLOCK must be >= 0"},
+		{"both negative", "-1", "-1", "N3_START_BLOCK must be >= 0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("N3_START_BLOCK", tt.n3)
+			t.Setenv("NEOX_START_BLOCK", tt.neox)
+
+			cfg, err := Load(newViper())
+			if err == nil {
+				t.Fatalf("Load(newViper()) should return error for negative start block, got nil")
+			}
+			if cfg != nil {
+				t.Errorf("Load(newViper()) should return nil config on error, got %v", cfg)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error %q should contain %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+

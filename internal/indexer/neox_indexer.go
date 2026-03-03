@@ -9,8 +9,10 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
+	"github.com/bane-labs/bridge-indexer-backend/internal/monitor"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/neox"
 )
@@ -31,7 +33,8 @@ type NeoXIndexer struct {
 	contracts   []common.Address
 	startBlock  uint64
 	concurrency int
-	logger      *slog.Logger
+	logger        *slog.Logger
+	pauseDetector *monitor.PauseDetector
 }
 
 func NewNeoXIndexer(
@@ -43,6 +46,7 @@ func NewNeoXIndexer(
 	startBlock uint64,
 	concurrency int,
 	logger *slog.Logger,
+	pauseDetector *monitor.PauseDetector,
 ) *NeoXIndexer {
 	if concurrency <= 0 {
 		concurrency = 1
@@ -55,7 +59,8 @@ func NewNeoXIndexer(
 		contracts:   neox.HexToAddresses(contractAddresses),
 		startBlock:  startBlock,
 		concurrency: concurrency,
-		logger:      logger,
+		logger:        logger,
+		pauseDetector: pauseDetector,
 	}
 }
 
@@ -303,53 +308,83 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 	}
 
 	var allOps []*types.BridgeOperation
+	headerCache := map[uint64]*ethtypes.Header{}
 
-	if len(logs) > 0 {
-		// Only fetch header when we have events (lazy header).
-		header, hErr := idx.client.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
-		if hErr != nil {
-			return nil, nil, fmt.Errorf("get header %d: %w", to, hErr)
+	for _, l := range logs {
+		if l.Removed {
+			idx.logger.Warn("Reorg detected: removed log",
+				"block", l.BlockNumber,
+				"tx", l.TxHash.Hex(),
+			)
+			continue
+		}
+
+		if idx.processor == nil {
+			continue
+		}
+
+		// Per-log header fetch with cache to get accurate block timestamp.
+		header, ok := headerCache[l.BlockNumber]
+		if !ok {
+			var hErr error
+			header, hErr = idx.client.HeaderByNumber(ctx, new(big.Int).SetUint64(l.BlockNumber))
+			if hErr != nil {
+				idx.logger.Warn("Failed to fetch header for log",
+					"block", l.BlockNumber,
+					"tx", l.TxHash.Hex(),
+					"error", hErr,
+				)
+				continue
+			}
+			headerCache[l.BlockNumber] = header
 		}
 		blockTime := time.Unix(int64(header.Time), 0)
 
-		for _, l := range logs {
-			if l.Removed {
-				idx.logger.Warn("Reorg detected: removed log",
-					"block", l.BlockNumber,
-					"tx", l.TxHash.Hex(),
-				)
-				continue
-			}
-
-			if idx.processor == nil {
-				continue
-			}
-
-			op, pauseState, pErr := idx.processor.ProcessLog(l, blockTime)
-			if pErr != nil {
-				idx.logger.Warn("Failed to process log",
-					"tx", l.TxHash.Hex(),
-					"error", pErr,
-				)
-				continue
-			}
-			if op != nil {
-				allOps = append(allOps, op)
-			}
-			if pauseState != nil {
-				idx.logger.Info("Bridge pause state change",
-					"bridge_type", pauseState.BridgeType,
-					"paused", pauseState.Paused,
-					"scope", pauseState.Scope,
-				)
+		op, pauseState, pErr := idx.processor.ProcessLog(l, blockTime)
+		if pErr != nil {
+			idx.logger.Warn("Failed to process log",
+				"tx", l.TxHash.Hex(),
+				"error", pErr,
+			)
+			continue
+		}
+		if op != nil {
+			allOps = append(allOps, op)
+		}
+		if pauseState != nil {
+			idx.logger.Info("Bridge pause state change",
+				"bridge_type", pauseState.BridgeType,
+				"paused", pauseState.Paused,
+				"scope", pauseState.Scope,
+			)
+			if idx.pauseDetector != nil {
+				idx.pauseDetector.UpdatePause(pauseState.BridgeType, pauseState.Paused, pauseState.Scope)
 			}
 		}
+	}
+
+	// Fetch to-block header for LastBlockHash (may already be cached).
+	toHeader, ok := headerCache[to]
+	if !ok {
+		var hErr error
+		toHeader, hErr = idx.client.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
+		if hErr != nil {
+			idx.logger.Warn("Failed to fetch header for to-block",
+				"block", to,
+				"error", hErr,
+			)
+		}
+	}
+
+	lastBlockHash := ""
+	if toHeader != nil {
+		lastBlockHash = toHeader.Hash().Hex()
 	}
 
 	newState := &types.IndexerState{
 		Chain:           chainNeoX,
 		LastBlockHeight: to,
-		LastBlockHash:   "", // skip header fetch for no-op ranges
+		LastBlockHash:   lastBlockHash,
 		IsSyncing:       true,
 		UpdatedAt:       time.Now(),
 	}

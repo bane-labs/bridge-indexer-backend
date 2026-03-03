@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -107,8 +108,14 @@ func (h *Handler) GetHealthDelays(c echo.Context) error {
 // @Router       /indexer/state [get]
 
 func (h *Handler) GetIndexerState(c echo.Context) error {
-	n3State, _ := h.store.GetIndexerState("neo_n3")
-	neoxState, _ := h.store.GetIndexerState("neo_x")
+	n3State, err := h.store.GetIndexerState("neo_n3")
+	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	neoxState, err := h.store.GetIndexerState("neo_x")
+	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
 
 	result := map[string]interface{}{
 		"neo_n3": n3State,
@@ -193,6 +200,12 @@ func (h *Handler) GetOperationByNonce(c echo.Context) error {
 	for _, bt := range bridgeTypes {
 		for _, dir := range directions {
 			op, err := h.opStore.GetOperation(bt, dir, nonce)
+			if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			}
+			if errors.Is(err, datastore.ErrNotFound) {
+				continue
+			}
 			if err == nil {
 				results = append(results, *op)
 			}

@@ -122,6 +122,12 @@ func Load(v *viper.Viper) (*Config, error) {
 	if err := v.Unmarshal(&raw); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	if raw.N3StartBlock < 0 {
+		return nil, fmt.Errorf("N3_START_BLOCK must be >= 0, got %d", raw.N3StartBlock)
+	}
+	if raw.NeoXStartBlock < 0 {
+		return nil, fmt.Errorf("NEOX_START_BLOCK must be >= 0, got %d", raw.NeoXStartBlock)
+	}
 
 	cfg := &Config{
 		N3RPCEndpoints:      parseCommaSeparated(raw.N3RPCEndpoints),

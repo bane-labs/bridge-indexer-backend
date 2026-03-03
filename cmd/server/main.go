@@ -128,7 +128,8 @@ func run(cmd *cobra.Command, args []string) error {
 
 	neoxEventProc := indexer.NewNeoXEventProcessor(opStore, store, cfg.NeoXTokenBridge, cfg.NeoXMessageBridge, logger)
 	neoxContracts := []string{cfg.NeoXTokenBridge, cfg.NeoXMessageBridge}
-	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, neoxEventProc, neoxContracts, cfg.NeoXStartBlock, cfg.NeoXSyncConcurrency, logger)
+	pauseDetector := monitor.NewPauseDetector(store, logger)
+	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, neoxEventProc, neoxContracts, cfg.NeoXStartBlock, cfg.NeoXSyncConcurrency, logger, pauseDetector)
 
 	var alerters []alerter.Alerter
 	if cfg.DiscordConfigured() {
@@ -147,7 +148,6 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 	multiAlerter := alerter.NewMultiAlerter(alerters...)
 
-	pauseDetector := monitor.NewPauseDetector(store, logger)
 	stuckDetector := monitor.NewStuckDetector(opStore, multiAlerter, cfg.StuckThreshold, logger)
 	healthAgg := monitor.NewHealthAggregator(opStore, pauseDetector, logger)
 	mon := monitor.NewMonitor(stuckDetector, pauseDetector, healthAgg, logger)

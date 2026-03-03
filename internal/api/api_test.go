@@ -181,3 +181,61 @@ func TestGetOperationByNonce_InvalidNonce(t *testing.T) {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
+
+func TestGetIndexerState_NotFound(t *testing.T) {
+	e, _, _ := setup(t)
+
+	// Fresh database has no indexer state, should return null values
+	req := httptest.NewRequest(http.MethodGet, "/indexer/state", nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Both states should be nil when not found
+	if result["neo_n3"] != nil || result["neo_x"] != nil {
+		t.Fatalf("expected nil states for fresh indexer, got %v", result)
+	}
+}
+
+func TestGetOperationByNonce_MultipleResults(t *testing.T) {
+	e, _, opStore := setup(t)
+
+	// Save operations with same nonce but different bridge types/directions
+	op1 := &types.BridgeOperation{
+		BridgeType: types.BridgeTypeNative, Direction: types.DirectionDeposit, Nonce: 100,
+		SourceChain: "neo_n3", DestinationChain: "neo_x", SourceBlockHeight: 100,
+		SourceTxHash: "0xtx1", FromAddress: "f", ToAddress: "t",
+		Timestamp: time.Now(), Status: types.StatusPending,
+	}
+	op2 := &types.BridgeOperation{
+		BridgeType: types.BridgeTypeToken, Direction: types.DirectionWithdrawal, Nonce: 100,
+		SourceChain: "neo_x", DestinationChain: "neo_n3", SourceBlockHeight: 200,
+		SourceTxHash: "0xtx2", FromAddress: "f", ToAddress: "t",
+		Timestamp: time.Now(), Status: types.StatusCompleted,
+	}
+	_ = opStore.SaveOperation(op1)
+	_ = opStore.SaveOperation(op2)
+
+	req := httptest.NewRequest(http.MethodGet, "/operations/100", nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var result []types.BridgeOperation
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 operations, got %d", len(result))
+	}
+}
