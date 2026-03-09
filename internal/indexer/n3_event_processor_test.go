@@ -35,7 +35,7 @@ func newTestOpStore(t *testing.T) *datastore.OperationStore {
 func newTestProcessor(t *testing.T) (*N3EventProcessorImpl, *datastore.OperationStore) {
 	t.Helper()
 	opStore := newTestOpStore(t)
-	proc, err := NewN3EventProcessor(opStore, testNeoXBridgeHash, testMessageBridgeHash, slog.Default())
+	proc, err := NewN3EventProcessor(opStore, nil, testNeoXBridgeHash, testMessageBridgeHash, slog.Default())
 	if err != nil {
 		t.Fatalf("new processor: %v", err)
 	}

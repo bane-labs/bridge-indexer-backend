@@ -26,21 +26,23 @@ const (
 )
 
 type NeoXIndexer struct {
-	client        *neox.Client
-	store         *datastore.Store
-	opStore       *datastore.OperationStore
-	processor     *NeoXEventProcessorImpl
-	contracts     []common.Address
-	startBlock    uint64
-	concurrency   int
-	logger        *slog.Logger
-	pauseDetector *monitor.PauseDetector
+	client           *neox.Client
+	store            *datastore.Store
+	opStore          *datastore.OperationStore
+	bridgeStateStore *datastore.BridgeStateStore
+	processor        *NeoXEventProcessorImpl
+	contracts        []common.Address
+	startBlock       uint64
+	concurrency      int
+	logger           *slog.Logger
+	pauseDetector    *monitor.PauseDetector
 }
 
 func NewNeoXIndexer(
 	client *neox.Client,
 	store *datastore.Store,
 	opStore *datastore.OperationStore,
+	bridgeStateStore *datastore.BridgeStateStore,
 	processor *NeoXEventProcessorImpl,
 	contractAddresses []string,
 	startBlock uint64,
@@ -52,15 +54,16 @@ func NewNeoXIndexer(
 		concurrency = 1
 	}
 	return &NeoXIndexer{
-		client:        client,
-		store:         store,
-		opStore:       opStore,
-		processor:     processor,
-		contracts:     neox.HexToAddresses(contractAddresses),
-		startBlock:    startBlock,
-		concurrency:   concurrency,
-		logger:        logger,
-		pauseDetector: pauseDetector,
+		client:           client,
+		store:            store,
+		opStore:          opStore,
+		bridgeStateStore: bridgeStateStore,
+		processor:        processor,
+		contracts:        neox.HexToAddresses(contractAddresses),
+		startBlock:       startBlock,
+		concurrency:      concurrency,
+		logger:           logger,
+		pauseDetector:    pauseDetector,
 	}
 }
 
@@ -244,6 +247,7 @@ func (idx *NeoXIndexer) runParallel(ctx context.Context, startHeight uint64) err
 			if err := idx.store.SaveIndexerStateWithOperations(r.state, r.ops); err != nil {
 				return fmt.Errorf("save state with ops at %d: %w", r.to, err)
 			}
+			idx.updateBridgeSourceStates(r.ops)
 			continue
 		}
 
@@ -280,6 +284,7 @@ func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) 
 		if err := idx.store.SaveIndexerStateWithOperations(state, ops); err != nil {
 			return fmt.Errorf("save state with ops: %w", err)
 		}
+		idx.updateBridgeSourceStates(ops)
 	} else {
 		if err := idx.store.SaveIndexerState(state); err != nil {
 			return fmt.Errorf("save state: %w", err)
@@ -394,4 +399,24 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 	}
 
 	return newState, allOps, nil
+}
+
+// updateBridgeSourceStates updates the directional bridge state for each new pending operation.
+func (idx *NeoXIndexer) updateBridgeSourceStates(ops []*types.BridgeOperation) {
+	if idx.bridgeStateStore == nil {
+		return
+	}
+	for _, op := range ops {
+		if op.Status != types.StatusPending {
+			continue
+		}
+		instanceID := datastore.InstanceIDFromOperation(op)
+		cs := datastore.BuildSourceChainState(op)
+		if err := idx.bridgeStateStore.UpdateSourceState(instanceID, cs); err != nil {
+			idx.logger.Warn("Failed to update source bridge state",
+				"instance_id", instanceID,
+				"error", err,
+			)
+		}
+	}
 }

@@ -24,20 +24,22 @@ const (
 )
 
 type N3Indexer struct {
-	client      *n3.Client
-	store       *datastore.Store
-	opStore     *datastore.OperationStore
-	processor   *N3EventProcessorImpl
-	contracts   []util.Uint160
-	startBlock  uint64
-	concurrency int
-	logger      *slog.Logger
+	client           *n3.Client
+	store            *datastore.Store
+	opStore          *datastore.OperationStore
+	bridgeStateStore *datastore.BridgeStateStore
+	processor        *N3EventProcessorImpl
+	contracts        []util.Uint160
+	startBlock       uint64
+	concurrency      int
+	logger           *slog.Logger
 }
 
 func NewN3Indexer(
 	client *n3.Client,
 	store *datastore.Store,
 	opStore *datastore.OperationStore,
+	bridgeStateStore *datastore.BridgeStateStore,
 	processor *N3EventProcessorImpl,
 	contractHashes []string,
 	startBlock uint64,
@@ -54,14 +56,15 @@ func NewN3Indexer(
 	}
 
 	return &N3Indexer{
-		client:      client,
-		store:       store,
-		opStore:     opStore,
-		processor:   processor,
-		contracts:   contracts,
-		startBlock:  startBlock,
-		concurrency: concurrency,
-		logger:      logger,
+		client:           client,
+		store:            store,
+		opStore:          opStore,
+		bridgeStateStore: bridgeStateStore,
+		processor:        processor,
+		contracts:        contracts,
+		startBlock:       startBlock,
+		concurrency:      concurrency,
+		logger:           logger,
 	}, nil
 }
 
@@ -229,6 +232,7 @@ func (idx *N3Indexer) runParallel(ctx context.Context, startHeight uint32, concu
 			if err := idx.store.SaveIndexerStateWithOperations(r.state, r.ops); err != nil {
 				return fmt.Errorf("save state with ops at %d: %w", r.height, err)
 			}
+			idx.updateBridgeSourceStates(r.ops)
 			noOpCount = 0
 			lastNoOpState = nil
 			continue
@@ -319,6 +323,7 @@ func (idx *N3Indexer) processBlock(ctx context.Context, height uint32) error {
 		if err := idx.store.SaveIndexerStateWithOperations(newState, allOps); err != nil {
 			return fmt.Errorf("save state with ops: %w", err)
 		}
+		idx.updateBridgeSourceStates(allOps)
 	} else {
 		if err := idx.store.SaveIndexerState(newState); err != nil {
 			return fmt.Errorf("save state: %w", err)
@@ -448,4 +453,24 @@ func (idx *N3Indexer) isWatchedContract(hash util.Uint160) bool {
 		}
 	}
 	return false
+}
+
+// updateBridgeSourceStates updates the directional bridge state for each new pending operation.
+func (idx *N3Indexer) updateBridgeSourceStates(ops []*types.BridgeOperation) {
+	if idx.bridgeStateStore == nil {
+		return
+	}
+	for _, op := range ops {
+		if op.Status != types.StatusPending {
+			continue
+		}
+		instanceID := datastore.InstanceIDFromOperation(op)
+		cs := datastore.BuildSourceChainState(op)
+		if err := idx.bridgeStateStore.UpdateSourceState(instanceID, cs); err != nil {
+			idx.logger.Warn("Failed to update source bridge state",
+				"instance_id", instanceID,
+				"error", err,
+			)
+		}
+	}
 }
