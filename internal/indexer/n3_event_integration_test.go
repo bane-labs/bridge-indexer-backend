@@ -29,7 +29,7 @@ func TestN3EventProcessor_RealDeposit(t *testing.T) {
 
 	_, opStore := testutil.NewTestStore(t)
 
-	proc, err := NewN3EventProcessor(opStore, testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash(), slog.Default())
+	proc, err := NewN3EventProcessor(opStore, nil, testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash(), slog.Default())
 	if err != nil {
 		t.Fatalf("NewN3EventProcessor: %v", err)
 	}

@@ -111,6 +111,8 @@ func run(cmd *cobra.Command, args []string) error {
 			if initErr := bridgeStateStore.SaveBridgeState(initState); initErr != nil {
 				logger.Warn("Failed to initialize bridge state", "instance_id", id, "error", initErr)
 			}
+		} else if err != nil {
+			logger.Error("Failed to check bridge state at startup", "instance_id", id, "error", err)
 		}
 	}
 

@@ -275,8 +275,8 @@ func (p *N3EventProcessorImpl) handleNativeWithdrawalComplete(
 		p.logger.Info("Completed native withdrawal via N3", "nonce", nonce)
 		if p.bridgeStateStore != nil {
 			instanceID := datastore.BuildInstanceID("native", chainNeoX, chainN3, nil, nil)
-			cs := datastore.BuildDestChainState(nonce, destBlock, txHash, blockTime)
-			if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs); bsErr != nil {
+			cs := datastore.BuildDestChainState(nonce, destBlock, txHash, blockTime, nil)
+			if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs, nil); bsErr != nil {
 				p.logger.Warn("Failed to update dest bridge state", "error", bsErr)
 			}
 		}
@@ -322,8 +322,8 @@ func (p *N3EventProcessorImpl) handleTokenWithdrawalComplete(
 		p.logger.Info("Completed token withdrawal via N3", "nonce", nonce)
 		if p.bridgeStateStore != nil && lookupErr == nil {
 			instanceID := datastore.InstanceIDFromOperation(existingOp)
-			cs := datastore.BuildDestChainState(nonce, destBlock, txHash, blockTime)
-			if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs); bsErr != nil {
+			cs := datastore.BuildDestChainState(nonce, destBlock, txHash, blockTime, nil)
+			if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs, existingOp); bsErr != nil {
 				p.logger.Warn("Failed to update dest bridge state", "error", bsErr)
 			}
 		}
@@ -417,8 +417,8 @@ func (p *N3EventProcessorImpl) handleN3Execution(
 		p.logger.Debug("No pending message withdrawal found for nonce", "nonce", nonce)
 	} else if p.bridgeStateStore != nil {
 		instanceID := datastore.BuildInstanceID("message", chainNeoX, chainN3, nil, nil)
-		cs := datastore.BuildDestChainState(nonce, destBlock, txHash, blockTime)
-		if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs); bsErr != nil {
+		cs := datastore.BuildDestChainState(nonce, destBlock, txHash, blockTime, nil)
+		if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs, nil); bsErr != nil {
 			p.logger.Warn("Failed to update dest bridge state", "error", bsErr)
 		}
 	}

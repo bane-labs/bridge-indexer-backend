@@ -26,13 +26,13 @@ func TestN3Indexer_ProcessBlock_WithEvents(t *testing.T) {
 
 	store, opStore := testutil.NewTestStore(t)
 
-	proc, err := NewN3EventProcessor(opStore, testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash(), slog.Default())
+	proc, err := NewN3EventProcessor(opStore, nil, testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash(), slog.Default())
 	if err != nil {
 		t.Fatalf("NewN3EventProcessor: %v", err)
 	}
 
 	contractHashes := []string{testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash()}
-	idx, err := NewN3Indexer(client, store, opStore, proc, contractHashes, 0, 1, slog.Default())
+	idx, err := NewN3Indexer(client, store, opStore, nil, proc, contractHashes, 0, 1, slog.Default())
 	if err != nil {
 		t.Fatalf("NewN3Indexer: %v", err)
 	}
@@ -77,13 +77,13 @@ func TestN3Indexer_ProcessBlock_NoEvents(t *testing.T) {
 
 	store, opStore := testutil.NewTestStore(t)
 
-	proc, err := NewN3EventProcessor(opStore, testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash(), slog.Default())
+	proc, err := NewN3EventProcessor(opStore, nil, testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash(), slog.Default())
 	if err != nil {
 		t.Fatalf("NewN3EventProcessor: %v", err)
 	}
 
 	contractHashes := []string{testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash()}
-	idx, err := NewN3Indexer(client, store, opStore, proc, contractHashes, 0, 1, slog.Default())
+	idx, err := NewN3Indexer(client, store, opStore, nil, proc, contractHashes, 0, 1, slog.Default())
 	if err != nil {
 		t.Fatalf("NewN3Indexer: %v", err)
 	}
@@ -128,13 +128,13 @@ func TestN3Indexer_ProcessBlock_Sequential(t *testing.T) {
 
 	store, opStore := testutil.NewTestStore(t)
 
-	proc, err := NewN3EventProcessor(opStore, testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash(), slog.Default())
+	proc, err := NewN3EventProcessor(opStore, nil, testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash(), slog.Default())
 	if err != nil {
 		t.Fatalf("NewN3EventProcessor: %v", err)
 	}
 
 	contractHashes := []string{testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash()}
-	idx, err := NewN3Indexer(client, store, opStore, proc, contractHashes, 0, 1, slog.Default())
+	idx, err := NewN3Indexer(client, store, opStore, nil, proc, contractHashes, 0, 1, slog.Default())
 	if err != nil {
 		t.Fatalf("NewN3Indexer: %v", err)
 	}

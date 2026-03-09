@@ -115,7 +115,7 @@ func TestBridgeStateStore_UpdateSourceState(t *testing.T) {
 	}
 
 	// Should create if not exists.
-	if err := bs.UpdateSourceState(instanceID, cs); err != nil {
+	if err := bs.UpdateSourceState(instanceID, cs, nil); err != nil {
 		t.Fatalf("update source: %v", err)
 	}
 
@@ -141,7 +141,7 @@ func TestBridgeStateStore_UpdateSourceState(t *testing.T) {
 		ObservedAt:  time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
 		IndexedAt:   time.Date(2026, 1, 2, 0, 0, 1, 0, time.UTC),
 	}
-	if err := bs.UpdateSourceState(instanceID, cs2); err != nil {
+	if err := bs.UpdateSourceState(instanceID, cs2, nil); err != nil {
 		t.Fatalf("update source 2: %v", err)
 	}
 
@@ -168,7 +168,7 @@ func TestBridgeStateStore_UpdateDestState(t *testing.T) {
 		ObservedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		IndexedAt:   time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
 	}
-	if err := bs.UpdateSourceState(instanceID, srcCS); err != nil {
+	if err := bs.UpdateSourceState(instanceID, srcCS, nil); err != nil {
 		t.Fatalf("update source: %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestBridgeStateStore_UpdateDestState(t *testing.T) {
 		ObservedAt:  time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
 		IndexedAt:   time.Date(2026, 1, 2, 0, 0, 1, 0, time.UTC),
 	}
-	if err := bs.UpdateDestState(instanceID, destCS); err != nil {
+	if err := bs.UpdateDestState(instanceID, destCS, nil); err != nil {
 		t.Fatalf("update dest: %v", err)
 	}
 
@@ -222,10 +222,10 @@ func TestBridgeStateStore_TokenPairIsolation(t *testing.T) {
 		IndexedAt:   time.Now(),
 	}
 
-	if err := bs.UpdateSourceState(idA, csA); err != nil {
+	if err := bs.UpdateSourceState(idA, csA, nil); err != nil {
 		t.Fatalf("update A: %v", err)
 	}
-	if err := bs.UpdateSourceState(idB, csB); err != nil {
+	if err := bs.UpdateSourceState(idB, csB, nil); err != nil {
 		t.Fatalf("update B: %v", err)
 	}
 

@@ -214,8 +214,8 @@ func (p *NeoXEventProcessorImpl) handleNativeDepositComplete(log ethtypes.Log, b
 		p.logger.Debug("No pending native deposit for nonce", "nonce", nonce)
 	} else if p.bridgeStateStore != nil {
 		instanceID := datastore.BuildInstanceID("native", chainN3, chainNeoX, nil, nil)
-		cs := datastore.BuildDestChainState(nonce, destBlock, log.TxHash.Hex(), blockTime)
-		if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs); bsErr != nil {
+		cs := datastore.BuildDestChainState(nonce, destBlock, log.TxHash.Hex(), blockTime, nil)
+		if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs, nil); bsErr != nil {
 			p.logger.Warn("Failed to update dest bridge state", "error", bsErr)
 		}
 	}
@@ -293,8 +293,8 @@ func (p *NeoXEventProcessorImpl) handleTokenDepositComplete(log ethtypes.Log, bl
 		p.logger.Debug("No pending token deposit for nonce", "nonce", nonce)
 	} else if p.bridgeStateStore != nil && lookupErr == nil {
 		instanceID := datastore.InstanceIDFromOperation(existingOp)
-		cs := datastore.BuildDestChainState(nonce, destBlock, log.TxHash.Hex(), blockTime)
-		if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs); bsErr != nil {
+		cs := datastore.BuildDestChainState(nonce, destBlock, log.TxHash.Hex(), blockTime, nil)
+		if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs, existingOp); bsErr != nil {
 			p.logger.Warn("Failed to update dest bridge state", "error", bsErr)
 		}
 	}
@@ -352,8 +352,8 @@ func (p *NeoXEventProcessorImpl) handleMessageExecution(log ethtypes.Log, blockT
 		p.logger.Debug("No pending message deposit for nonce", "nonce", nonce)
 	} else if p.bridgeStateStore != nil {
 		instanceID := datastore.BuildInstanceID("message", chainN3, chainNeoX, nil, nil)
-		cs := datastore.BuildDestChainState(nonce, destBlock, log.TxHash.Hex(), blockTime)
-		if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs); bsErr != nil {
+		cs := datastore.BuildDestChainState(nonce, destBlock, log.TxHash.Hex(), blockTime, nil)
+		if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs, nil); bsErr != nil {
 			p.logger.Warn("Failed to update dest bridge state", "error", bsErr)
 		}
 	}

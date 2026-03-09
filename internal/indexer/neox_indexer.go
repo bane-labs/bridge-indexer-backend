@@ -244,10 +244,19 @@ func (idx *NeoXIndexer) runParallel(ctx context.Context, startHeight uint64) err
 				noOpCount = 0
 				lastNoOpState = nil
 			}
-			if err := idx.store.SaveIndexerStateWithOperations(r.state, r.ops); err != nil {
-				return fmt.Errorf("save state with ops at %d: %w", r.to, err)
+			extraOps, bsErr := idx.buildBridgeStateWriteOps(r.ops)
+			if bsErr != nil {
+				idx.logger.Warn("Failed to build bridge state write ops", "error", bsErr)
 			}
-			idx.updateBridgeSourceStates(r.ops)
+			if len(extraOps) > 0 {
+				if err := idx.store.SaveIndexerStateWithOperationsAndExtra(r.state, r.ops, extraOps); err != nil {
+					return fmt.Errorf("save state with ops at %d: %w", r.to, err)
+				}
+			} else {
+				if err := idx.store.SaveIndexerStateWithOperations(r.state, r.ops); err != nil {
+					return fmt.Errorf("save state with ops at %d: %w", r.to, err)
+				}
+			}
 			continue
 		}
 
@@ -281,10 +290,19 @@ func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) 
 	}
 
 	if len(ops) > 0 {
-		if err := idx.store.SaveIndexerStateWithOperations(state, ops); err != nil {
-			return fmt.Errorf("save state with ops: %w", err)
+		extraOps, bsErr := idx.buildBridgeStateWriteOps(ops)
+		if bsErr != nil {
+			idx.logger.Warn("Failed to build bridge state write ops", "error", bsErr)
 		}
-		idx.updateBridgeSourceStates(ops)
+		if len(extraOps) > 0 {
+			if err := idx.store.SaveIndexerStateWithOperationsAndExtra(state, ops, extraOps); err != nil {
+				return fmt.Errorf("save state with ops: %w", err)
+			}
+		} else {
+			if err := idx.store.SaveIndexerStateWithOperations(state, ops); err != nil {
+				return fmt.Errorf("save state with ops: %w", err)
+			}
+		}
 	} else {
 		if err := idx.store.SaveIndexerState(state); err != nil {
 			return fmt.Errorf("save state: %w", err)
@@ -401,22 +419,10 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 	return newState, allOps, nil
 }
 
-// updateBridgeSourceStates updates the directional bridge state for each new pending operation.
-func (idx *NeoXIndexer) updateBridgeSourceStates(ops []*types.BridgeOperation) {
+// buildBridgeStateWriteOps builds atomic write ops for bridge state updates.
+func (idx *NeoXIndexer) buildBridgeStateWriteOps(ops []*types.BridgeOperation) ([]datastore.WriteOp, error) {
 	if idx.bridgeStateStore == nil {
-		return
+		return nil, nil
 	}
-	for _, op := range ops {
-		if op.Status != types.StatusPending {
-			continue
-		}
-		instanceID := datastore.InstanceIDFromOperation(op)
-		cs := datastore.BuildSourceChainState(op)
-		if err := idx.bridgeStateStore.UpdateSourceState(instanceID, cs); err != nil {
-			idx.logger.Warn("Failed to update source bridge state",
-				"instance_id", instanceID,
-				"error", err,
-			)
-		}
-	}
+	return idx.bridgeStateStore.BuildSourceStateWriteOps(ops)
 }
