@@ -231,7 +231,7 @@ func (idx *N3Indexer) runParallel(ctx context.Context, startHeight uint32, concu
 		if len(r.ops) > 0 {
 			extraOps, bsErr := idx.buildBridgeStateWriteOps(r.ops)
 			if bsErr != nil {
-				idx.logger.Warn("Failed to build bridge state write ops", "error", bsErr)
+				return fmt.Errorf("build bridge state write ops at %d: %w", r.height, bsErr)
 			}
 			if len(extraOps) > 0 {
 				if err := idx.store.SaveIndexerStateWithOperationsAndExtra(r.state, r.ops, extraOps); err != nil {
@@ -331,7 +331,7 @@ func (idx *N3Indexer) processBlock(ctx context.Context, height uint32) error {
 	if len(allOps) > 0 {
 		extraOps, bsErr := idx.buildBridgeStateWriteOps(allOps)
 		if bsErr != nil {
-			idx.logger.Warn("Failed to build bridge state write ops", "error", bsErr)
+			return fmt.Errorf("build bridge state write ops: %w", bsErr)
 		}
 		if len(extraOps) > 0 {
 			if err := idx.store.SaveIndexerStateWithOperationsAndExtra(newState, allOps, extraOps); err != nil {

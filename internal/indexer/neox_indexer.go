@@ -246,7 +246,7 @@ func (idx *NeoXIndexer) runParallel(ctx context.Context, startHeight uint64) err
 			}
 			extraOps, bsErr := idx.buildBridgeStateWriteOps(r.ops)
 			if bsErr != nil {
-				idx.logger.Warn("Failed to build bridge state write ops", "error", bsErr)
+				return fmt.Errorf("build bridge state write ops at %d: %w", r.to, bsErr)
 			}
 			if len(extraOps) > 0 {
 				if err := idx.store.SaveIndexerStateWithOperationsAndExtra(r.state, r.ops, extraOps); err != nil {
@@ -292,7 +292,7 @@ func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) 
 	if len(ops) > 0 {
 		extraOps, bsErr := idx.buildBridgeStateWriteOps(ops)
 		if bsErr != nil {
-			idx.logger.Warn("Failed to build bridge state write ops", "error", bsErr)
+			return fmt.Errorf("build bridge state write ops: %w", bsErr)
 		}
 		if len(extraOps) > 0 {
 			if err := idx.store.SaveIndexerStateWithOperationsAndExtra(state, ops, extraOps); err != nil {
