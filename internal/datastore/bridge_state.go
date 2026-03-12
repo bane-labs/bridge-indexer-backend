@@ -182,6 +182,33 @@ func (bs *BridgeStateStore) BuildSourceStateWriteOps(ops []*types.BridgeOperatio
 	return writeOps, nil
 }
 
+// BuildDestStateWriteOps builds a WriteOp for atomically updating destination-side bridge state
+// for a single operation. Returns ops that can be passed to SaveIndexerStateWithOperationsAndExtra.
+func (bs *BridgeStateStore) BuildDestStateWriteOps(op *types.BridgeOperation, destBlock uint64, destTxHash string, completionTime time.Time, root *string) ([]WriteOp, error) {
+	instanceID := InstanceIDFromOperation(op)
+	state, err := bs.GetBridgeState(instanceID)
+	if err != nil {
+		if err != ErrNotFound {
+			return nil, fmt.Errorf("get bridge state %s: %w", instanceID, err)
+		}
+		state = &types.DirectionalBridgeState{
+			InstanceID: instanceID,
+			BridgeType: op.BridgeType,
+			SrcChain:   op.SourceChain,
+			DstChain:   op.DestinationChain,
+			SrcToken:   op.TokenContract,
+			DstToken:   op.DestTokenContract,
+		}
+	}
+	state.DestState = BuildDestChainState(op.Nonce, destBlock, destTxHash, completionTime, root)
+	return []WriteOp{
+		{
+			Key:   bridgeStateKey(instanceID),
+			Value: state,
+		},
+	}, nil
+}
+
 // InstanceIDFromOperation derives the instance ID from a bridge operation.
 func InstanceIDFromOperation(op *types.BridgeOperation) string {
 	return BuildInstanceID(

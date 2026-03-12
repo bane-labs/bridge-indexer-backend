@@ -29,13 +29,13 @@ func newTestOpStore(t *testing.T) *datastore.OperationStore {
 	}
 	t.Cleanup(func() { db.Close() })
 	store := datastore.NewStoreFromDB(db, slog.Default())
-	return datastore.NewOperationStore(store)
+	return datastore.NewOperationStore(store, nil)
 }
 
 func newTestProcessor(t *testing.T) (*N3EventProcessorImpl, *datastore.OperationStore) {
 	t.Helper()
 	opStore := newTestOpStore(t)
-	proc, err := NewN3EventProcessor(opStore, nil, testNeoXBridgeHash, testMessageBridgeHash, slog.Default())
+	proc, err := NewN3EventProcessor(opStore, testNeoXBridgeHash, testMessageBridgeHash, slog.Default())
 	if err != nil {
 		t.Fatalf("new processor: %v", err)
 	}

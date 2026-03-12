@@ -106,5 +106,5 @@ func NewTestStore(t *testing.T) (*datastore.Store, *datastore.OperationStore) {
 	}
 	t.Cleanup(func() { db.Close() })
 	store := datastore.NewStoreFromDB(db, slog.Default())
-	return store, datastore.NewOperationStore(store)
+	return store, datastore.NewOperationStore(store, nil)
 }

@@ -27,7 +27,7 @@ func setup(t *testing.T) (*echo.Echo, *Handler, *datastore.OperationStore) {
 	t.Cleanup(func() { db.Close() })
 
 	store := datastore.NewStoreFromDB(db, slog.Default())
-	opStore := datastore.NewOperationStore(store)
+	opStore := datastore.NewOperationStore(store, nil)
 	pause := monitor.NewPauseDetector(store, slog.Default())
 	health := monitor.NewHealthAggregator(opStore, pause, slog.Default())
 	handler := NewHandler(store, opStore, health)

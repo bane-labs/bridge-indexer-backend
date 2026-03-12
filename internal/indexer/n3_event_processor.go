@@ -15,16 +15,14 @@ import (
 )
 
 type N3EventProcessorImpl struct {
-	opStore          *datastore.OperationStore
-	bridgeStateStore *datastore.BridgeStateStore
-	neoXBridge       util.Uint160
-	messageBridge    util.Uint160
-	logger           *slog.Logger
+	opStore       *datastore.OperationStore
+	neoXBridge    util.Uint160
+	messageBridge util.Uint160
+	logger        *slog.Logger
 }
 
 func NewN3EventProcessor(
 	opStore *datastore.OperationStore,
-	bridgeStateStore *datastore.BridgeStateStore,
 	neoXBridgeHash string,
 	messageBridgeHash string,
 	logger *slog.Logger,
@@ -38,11 +36,10 @@ func NewN3EventProcessor(
 		return nil, fmt.Errorf("invalid MessageBridge hash: %w", err)
 	}
 	return &N3EventProcessorImpl{
-		opStore:          opStore,
-		bridgeStateStore: bridgeStateStore,
-		neoXBridge:       nxb,
-		messageBridge:    mb,
-		logger:           logger,
+		opStore:       opStore,
+		neoXBridge:    nxb,
+		messageBridge: mb,
+		logger:        logger,
 	}, nil
 }
 
@@ -273,13 +270,6 @@ func (p *N3EventProcessorImpl) handleNativeWithdrawalComplete(
 	)
 	if err == nil {
 		p.logger.Info("Completed native withdrawal via N3", "nonce", nonce)
-		if p.bridgeStateStore != nil {
-			instanceID := datastore.BuildInstanceID("native", chainNeoX, chainN3, nil, nil)
-			cs := datastore.BuildDestChainState(nonce, destBlock, txHash, blockTime, nil)
-			if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs, nil); bsErr != nil {
-				p.logger.Warn("Failed to update dest bridge state", "error", bsErr)
-			}
-		}
 	} else {
 		p.logger.Debug("No pending native withdrawal found for nonce", "nonce", nonce)
 	}
@@ -310,9 +300,6 @@ func (p *N3EventProcessorImpl) handleTokenWithdrawalComplete(
 		return nil, fmt.Errorf("TokenWithdrawal nonce: %w", err)
 	}
 
-	// Look up the operation before completion to get token info for bridge state.
-	existingOp, lookupErr := p.opStore.GetOperation(types.BridgeTypeToken, types.DirectionWithdrawal, nonce)
-
 	destBlock := uint64(blockHeight)
 	err = p.opStore.UpdateOperationCompletion(
 		types.BridgeTypeToken, types.DirectionWithdrawal, nonce,
@@ -320,13 +307,6 @@ func (p *N3EventProcessorImpl) handleTokenWithdrawalComplete(
 	)
 	if err == nil {
 		p.logger.Info("Completed token withdrawal via N3", "nonce", nonce)
-		if p.bridgeStateStore != nil && lookupErr == nil {
-			instanceID := datastore.InstanceIDFromOperation(existingOp)
-			cs := datastore.BuildDestChainState(nonce, destBlock, txHash, blockTime, nil)
-			if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs, existingOp); bsErr != nil {
-				p.logger.Warn("Failed to update dest bridge state", "error", bsErr)
-			}
-		}
 	} else {
 		p.logger.Debug("No pending token withdrawal found for nonce", "nonce", nonce)
 	}
@@ -415,14 +395,9 @@ func (p *N3EventProcessorImpl) handleN3Execution(
 	)
 	if err != nil {
 		p.logger.Debug("No pending message withdrawal found for nonce", "nonce", nonce)
-	} else if p.bridgeStateStore != nil {
-		instanceID := datastore.BuildInstanceID("message", chainNeoX, chainN3, nil, nil)
-		cs := datastore.BuildDestChainState(nonce, destBlock, txHash, blockTime, nil)
-		if bsErr := p.bridgeStateStore.UpdateDestState(instanceID, cs, nil); bsErr != nil {
-			p.logger.Warn("Failed to update dest bridge state", "error", bsErr)
-		}
+	} else {
+		p.logger.Info("Completed message withdrawal via N3", "nonce", nonce)
 	}
-
 	return nil, nil
 }
 

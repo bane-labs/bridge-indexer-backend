@@ -87,8 +87,8 @@ func run(cmd *cobra.Command, args []string) error {
 			logger.Error("Failed to close datastore", "error", closeErr)
 		}
 	}()
-	opStore := datastore.NewOperationStore(store)
 	bridgeStateStore := datastore.NewBridgeStateStore(store)
+	opStore := datastore.NewOperationStore(store, bridgeStateStore)
 	logger.Info("Database initialized", "path", cfg.DBPath)
 
 	// Initialize static directional bridge instances (native + message × deposit + withdrawal).
@@ -137,7 +137,6 @@ func run(cmd *cobra.Command, args []string) error {
 
 	n3EventProc, err := indexer.NewN3EventProcessor(
 		opStore,
-		bridgeStateStore,
 		strings.TrimPrefix(cfg.N3NeoXBridge, "0x"),
 		strings.TrimPrefix(cfg.N3MessageBridge, "0x"),
 		logger,
@@ -154,7 +153,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create N3 indexer: %w", err)
 	}
 
-	neoxEventProc := indexer.NewNeoXEventProcessor(opStore, bridgeStateStore, store, cfg.NeoXTokenBridge, cfg.NeoXMessageBridge, logger)
+	neoxEventProc := indexer.NewNeoXEventProcessor(opStore, store, cfg.NeoXTokenBridge, cfg.NeoXMessageBridge, logger)
 	neoxContracts := []string{cfg.NeoXTokenBridge, cfg.NeoXMessageBridge}
 	pauseDetector := monitor.NewPauseDetector(store, logger)
 	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, bridgeStateStore, neoxEventProc, neoxContracts, cfg.NeoXStartBlock, cfg.NeoXSyncConcurrency, logger, pauseDetector)
@@ -364,7 +363,7 @@ func runBackfill(cmd *cobra.Command, args []string) error {
 			logger.Error("Failed to close datastore", "error", closeErr)
 		}
 	}()
-	opStore := datastore.NewOperationStore(store)
+	opStore := datastore.NewOperationStore(store, nil) // nil: backfill does not call UpdateOperationCompletion, so no dest bridge state updates needed
 	logger.Info("Database initialized", "path", cfg.DBPath)
 
 	ctx, cancel := context.WithCancel(context.Background())

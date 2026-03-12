@@ -25,12 +25,13 @@ type OperationFilter struct {
 
 // OperationStore provides bridge operation CRUD on top of Store.
 type OperationStore struct {
-	store *Store
+	store            *Store
+	bridgeStateStore *BridgeStateStore
 }
 
 // NewOperationStore creates a new OperationStore.
-func NewOperationStore(store *Store) *OperationStore {
-	return &OperationStore{store: store}
+func NewOperationStore(store *Store, bridgeStateStore *BridgeStateStore) *OperationStore {
+	return &OperationStore{store: store, bridgeStateStore: bridgeStateStore}
 }
 
 func operationKey(bt types.BridgeType, dir types.Direction, nonce uint64) string {
@@ -85,11 +86,21 @@ func (os *OperationStore) UpdateOperationCompletion(
 	oldIdxKey := statusIndexKey(oldStatus, bt, dir, nonce)
 	newIdxKey := statusIndexKey(types.StatusCompleted, bt, dir, nonce)
 
-	return os.store.BatchWrite([]WriteOp{
+	writeOps := []WriteOp{
 		{Key: opKey, Value: op},
 		{Key: oldIdxKey, Value: nil}, // delete old index
 		{Key: newIdxKey, Value: []byte{}},
-	})
+	}
+
+	if os.bridgeStateStore != nil {
+		destStateOps, err := os.bridgeStateStore.BuildDestStateWriteOps(op, destBlock, destTxHash, completionTime, nil)
+		if err != nil {
+			return fmt.Errorf("build dest state write ops: %w", err)
+		}
+		writeOps = append(writeOps, destStateOps...)
+	}
+
+	return os.store.BatchWrite(writeOps)
 }
 
 // ListOperations returns operations matching the filter.

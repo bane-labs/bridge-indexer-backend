@@ -26,7 +26,7 @@ func TestNeoXEventProcessor_RealNativeWithdrawal(t *testing.T) {
 
 	store, opStore := testutil.NewTestStore(t)
 
-	proc := NewNeoXEventProcessor(opStore, nil, store, testutil.NeoXTokenBridgeAddr, testutil.NeoXMessageBridgeAddr, slog.Default())
+	proc := NewNeoXEventProcessor(opStore, store, testutil.NeoXTokenBridgeAddr, testutil.NeoXMessageBridgeAddr, slog.Default())
 
 	// Fetch logs from the known block range (block 3244 has a confirmed log)
 	query := ethereum.FilterQuery{
