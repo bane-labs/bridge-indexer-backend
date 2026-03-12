@@ -24,20 +24,22 @@ const (
 )
 
 type N3Indexer struct {
-	client      *n3.Client
-	store       *datastore.Store
-	opStore     *datastore.OperationStore
-	processor   *N3EventProcessorImpl
-	contracts   []util.Uint160
-	startBlock  uint64
-	concurrency int
-	logger      *slog.Logger
+	client           *n3.Client
+	store            *datastore.Store
+	opStore          *datastore.OperationStore
+	bridgeStateStore *datastore.BridgeStateStore
+	processor        *N3EventProcessorImpl
+	contracts        []util.Uint160
+	startBlock       uint64
+	concurrency      int
+	logger           *slog.Logger
 }
 
 func NewN3Indexer(
 	client *n3.Client,
 	store *datastore.Store,
 	opStore *datastore.OperationStore,
+	bridgeStateStore *datastore.BridgeStateStore,
 	processor *N3EventProcessorImpl,
 	contractHashes []string,
 	startBlock uint64,
@@ -54,14 +56,15 @@ func NewN3Indexer(
 	}
 
 	return &N3Indexer{
-		client:      client,
-		store:       store,
-		opStore:     opStore,
-		processor:   processor,
-		contracts:   contracts,
-		startBlock:  startBlock,
-		concurrency: concurrency,
-		logger:      logger,
+		client:           client,
+		store:            store,
+		opStore:          opStore,
+		bridgeStateStore: bridgeStateStore,
+		processor:        processor,
+		contracts:        contracts,
+		startBlock:       startBlock,
+		concurrency:      concurrency,
+		logger:           logger,
 	}, nil
 }
 
@@ -226,8 +229,18 @@ func (idx *N3Indexer) runParallel(ctx context.Context, startHeight uint32, concu
 		}
 
 		if len(r.ops) > 0 {
-			if err := idx.store.SaveIndexerStateWithOperations(r.state, r.ops); err != nil {
-				return fmt.Errorf("save state with ops at %d: %w", r.height, err)
+			extraOps, bsErr := idx.buildBridgeStateWriteOps(r.ops)
+			if bsErr != nil {
+				return fmt.Errorf("build bridge state write ops at %d: %w", r.height, bsErr)
+			}
+			if len(extraOps) > 0 {
+				if err := idx.store.SaveIndexerStateWithOperationsAndExtra(r.state, r.ops, extraOps); err != nil {
+					return fmt.Errorf("save state with ops at %d: %w", r.height, err)
+				}
+			} else {
+				if err := idx.store.SaveIndexerStateWithOperations(r.state, r.ops); err != nil {
+					return fmt.Errorf("save state with ops at %d: %w", r.height, err)
+				}
 			}
 			noOpCount = 0
 			lastNoOpState = nil
@@ -316,8 +329,18 @@ func (idx *N3Indexer) processBlock(ctx context.Context, height uint32) error {
 	}
 
 	if len(allOps) > 0 {
-		if err := idx.store.SaveIndexerStateWithOperations(newState, allOps); err != nil {
-			return fmt.Errorf("save state with ops: %w", err)
+		extraOps, bsErr := idx.buildBridgeStateWriteOps(allOps)
+		if bsErr != nil {
+			return fmt.Errorf("build bridge state write ops: %w", bsErr)
+		}
+		if len(extraOps) > 0 {
+			if err := idx.store.SaveIndexerStateWithOperationsAndExtra(newState, allOps, extraOps); err != nil {
+				return fmt.Errorf("save state with ops: %w", err)
+			}
+		} else {
+			if err := idx.store.SaveIndexerStateWithOperations(newState, allOps); err != nil {
+				return fmt.Errorf("save state with ops: %w", err)
+			}
 		}
 	} else {
 		if err := idx.store.SaveIndexerState(newState); err != nil {
@@ -448,4 +471,12 @@ func (idx *N3Indexer) isWatchedContract(hash util.Uint160) bool {
 		}
 	}
 	return false
+}
+
+// buildBridgeStateWriteOps builds atomic write ops for bridge state updates.
+func (idx *N3Indexer) buildBridgeStateWriteOps(ops []*types.BridgeOperation) ([]datastore.WriteOp, error) {
+	if idx.bridgeStateStore == nil {
+		return nil, nil
+	}
+	return idx.bridgeStateStore.BuildSourceStateWriteOps(ops)
 }

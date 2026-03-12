@@ -40,11 +40,37 @@ type BridgeOperation struct {
 	DestBlockHeight     *uint64         `json:"dest_block_height,omitempty"`
 	SourceTxHash        string          `json:"source_tx_hash"`
 	DestTxHash          *string         `json:"dest_tx_hash,omitempty"`
-	TokenContract       *string         `json:"token_contract,omitempty"` // nil for native bridge
-	Amount              *string         `json:"amount,omitempty"`         // string to avoid big.Int JSON issues
+	TokenContract       *string         `json:"token_contract,omitempty"`      // source chain token; nil for native bridge
+	DestTokenContract   *string         `json:"dest_token_contract,omitempty"` // destination chain token; nil for native bridge
+	Root                *string         `json:"root,omitempty"`                // deposit/withdrawal root hash from event
+	Amount              *string         `json:"amount,omitempty"`              // string to avoid big.Int JSON issues
 	FromAddress         string          `json:"from_address"`
 	ToAddress           string          `json:"to_address"`
 	Timestamp           time.Time       `json:"timestamp"`                      // source event time
 	CompletionTimestamp *time.Time      `json:"completion_timestamp,omitempty"` // destination event time
 	Status              OperationStatus `json:"status"`
+}
+
+// ChainState represents the latest observed state on one side of a directional bridge.
+type ChainState struct {
+	Nonce       uint64    `json:"nonce"`
+	Root        *string   `json:"root,omitempty"`
+	BlockNumber uint64    `json:"block_number"`
+	TxHash      string    `json:"tx_hash"`
+	ObservedAt  time.Time `json:"observed_at"` // block timestamp
+	IndexedAt   time.Time `json:"indexed_at"`  // backend time
+}
+
+// DirectionalBridgeState represents the aggregate latest state for a specific
+// bridge type and direction. For token bridges, src/dst token addresses are
+// included to distinguish between different token pairs.
+type DirectionalBridgeState struct {
+	InstanceID  string      `json:"instance_id"`
+	BridgeType  BridgeType  `json:"bridge_type"`
+	SrcChain    string      `json:"src_chain"`
+	DstChain    string      `json:"dst_chain"`
+	SrcToken    *string     `json:"src_token,omitempty"`
+	DstToken    *string     `json:"dst_token,omitempty"`
+	SourceState *ChainState `json:"source_state,omitempty"`
+	DestState   *ChainState `json:"dest_state,omitempty"`
 }

@@ -170,6 +170,13 @@ func (p *NeoXEventProcessorImpl) handleNativeWithdrawal(log ethtypes.Log, blockT
 		from = common.BytesToAddress(log.Data[32:64])
 	}
 
+	// data layout: amount(32) + from(32) + withdrawalHash(32) + withdrawalRoot(32)
+	var root *string
+	if len(log.Data) >= 128 {
+		r := common.BytesToHash(log.Data[96:128]).Hex()
+		root = &r
+	}
+
 	amountStr := amount
 	return &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeNative,
@@ -179,6 +186,7 @@ func (p *NeoXEventProcessorImpl) handleNativeWithdrawal(log ethtypes.Log, blockT
 		DestinationChain:  chainN3,
 		SourceBlockHeight: log.BlockNumber,
 		SourceTxHash:      log.TxHash.Hex(),
+		Root:              root,
 		Amount:            &amountStr,
 		FromAddress:       from.Hex(),
 		ToAddress:         to.Hex(),
@@ -217,14 +225,27 @@ func (p *NeoXEventProcessorImpl) handleTokenWithdrawal(log ethtypes.Log, blockTi
 
 	amount := "0"
 	from := common.Address{}
+	var destTokenStr string
 	if len(log.Data) >= 96 {
-		// data: neoN3Token(32) + amount(32) + from(32) + ...
+		// data: neoN3Token(32) + amount(32) + from(32) + withdrawalHash(32) + withdrawalRoot(32)
+		destTokenStr = common.BytesToAddress(log.Data[0:32]).Hex()
 		amount = new(big.Int).SetBytes(log.Data[32:64]).String()
 		from = common.BytesToAddress(log.Data[64:96])
 	}
 
+	// withdrawalRoot at offset 128
+	var root *string
+	if len(log.Data) >= 160 {
+		r := common.BytesToHash(log.Data[128:160]).Hex()
+		root = &r
+	}
+
 	tokenStr := tokenAddr.Hex()
 	amountStr := amount
+	var destToken *string
+	if destTokenStr != "" {
+		destToken = &destTokenStr
+	}
 	return &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeToken,
 		Direction:         types.DirectionWithdrawal,
@@ -234,6 +255,8 @@ func (p *NeoXEventProcessorImpl) handleTokenWithdrawal(log ethtypes.Log, blockTi
 		SourceBlockHeight: log.BlockNumber,
 		SourceTxHash:      log.TxHash.Hex(),
 		TokenContract:     &tokenStr,
+		DestTokenContract: destToken,
+		Root:              root,
 		Amount:            &amountStr,
 		FromAddress:       from.Hex(),
 		ToAddress:         to.Hex(),
@@ -269,6 +292,15 @@ func (p *NeoXEventProcessorImpl) handleMessageSend(log ethtypes.Log, blockTime t
 	nonce := new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64()
 	sender := common.BytesToAddress(log.Topics[2].Bytes())
 
+	// The newEvmToNeoRoot is the last 32 bytes of log.Data.
+	// Data layout: offset(encodedMetadata) + offset(message) + messageHash(32) + newEvmToNeoRoot(32) + ...
+	// We extract the root from the last 32 bytes as it's always appended at the end by the contract.
+	var root *string
+	if len(log.Data) >= 32 {
+		r := common.BytesToHash(log.Data[len(log.Data)-32:]).Hex()
+		root = &r
+	}
+
 	return &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeMessage,
 		Direction:         types.DirectionWithdrawal,
@@ -277,6 +309,7 @@ func (p *NeoXEventProcessorImpl) handleMessageSend(log ethtypes.Log, blockTime t
 		DestinationChain:  chainN3,
 		SourceBlockHeight: log.BlockNumber,
 		SourceTxHash:      log.TxHash.Hex(),
+		Root:              root,
 		FromAddress:       sender.Hex(),
 		ToAddress:         "",
 		Timestamp:         blockTime,

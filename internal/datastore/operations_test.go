@@ -25,7 +25,7 @@ func sampleOp() *types.BridgeOperation {
 
 func TestOperationStore_SaveAndGet(t *testing.T) {
 	s := newTestStore(t)
-	os := NewOperationStore(s)
+	os := NewOperationStore(s, nil)
 
 	op := sampleOp()
 	if err := os.SaveOperation(op); err != nil {
@@ -43,7 +43,7 @@ func TestOperationStore_SaveAndGet(t *testing.T) {
 
 func TestOperationStore_GetNotFound(t *testing.T) {
 	s := newTestStore(t)
-	os := NewOperationStore(s)
+	os := NewOperationStore(s, nil)
 
 	_, err := os.GetOperation(types.BridgeTypeNative, types.DirectionDeposit, 999)
 	if err != ErrNotFound {
@@ -53,7 +53,7 @@ func TestOperationStore_GetNotFound(t *testing.T) {
 
 func TestOperationStore_UpdateCompletion(t *testing.T) {
 	s := newTestStore(t)
-	os := NewOperationStore(s)
+	os := NewOperationStore(s, nil)
 
 	op := sampleOp()
 	_ = os.SaveOperation(op)
@@ -81,7 +81,7 @@ func TestOperationStore_UpdateCompletion(t *testing.T) {
 
 func TestOperationStore_ListByStatus(t *testing.T) {
 	s := newTestStore(t)
-	os := NewOperationStore(s)
+	os := NewOperationStore(s, nil)
 
 	op1 := sampleOp()
 	op1.Nonce = 1
@@ -111,7 +111,7 @@ func TestOperationStore_ListByStatus(t *testing.T) {
 
 func TestOperationStore_ListByBridgeType(t *testing.T) {
 	s := newTestStore(t)
-	os := NewOperationStore(s)
+	os := NewOperationStore(s, nil)
 
 	op1 := sampleOp()
 	op1.Nonce = 1
@@ -138,7 +138,7 @@ func TestOperationStore_ListByBridgeType(t *testing.T) {
 
 func TestOperationStore_ListByDirection(t *testing.T) {
 	s := newTestStore(t)
-	os := NewOperationStore(s)
+	os := NewOperationStore(s, nil)
 
 	op1 := sampleOp()
 	op1.Nonce = 1
@@ -165,7 +165,7 @@ func TestOperationStore_ListByDirection(t *testing.T) {
 
 func TestOperationStore_DeleteOperation(t *testing.T) {
 	s := newTestStore(t)
-	os := NewOperationStore(s)
+	os := NewOperationStore(s, nil)
 
 	op := sampleOp()
 	_ = os.SaveOperation(op)
@@ -189,7 +189,7 @@ func TestOperationStore_DeleteOperation(t *testing.T) {
 
 func TestOperationStore_ListWithLimitOffset(t *testing.T) {
 	s := newTestStore(t)
-	os := NewOperationStore(s)
+	os := NewOperationStore(s, nil)
 
 	for i := uint64(1); i <= 5; i++ {
 		op := sampleOp()
@@ -259,12 +259,174 @@ func TestSaveIndexerStateWithOperations(t *testing.T) {
 		t.Fatalf("expected height 100, got %d", got.LastBlockHeight)
 	}
 
-	os := NewOperationStore(s)
+	os := NewOperationStore(s, nil)
 	gotOp, err := os.GetOperation(types.BridgeTypeNative, types.DirectionDeposit, 99)
 	if err != nil {
 		t.Fatalf("get op: %v", err)
 	}
 	if gotOp.Nonce != 99 {
 		t.Fatalf("expected nonce 99, got %d", gotOp.Nonce)
+	}
+}
+
+func TestOperationStore_UpdateCompletionWithBridgeState(t *testing.T) {
+	s := newTestStore(t)
+	bss := NewBridgeStateStore(s)
+	os := NewOperationStore(s, bss)
+
+	// Pre-create a bridge state with SourceState set
+	instanceID := BuildInstanceID("native", "neo_n3", "neo_x", nil, nil)
+	state := &types.DirectionalBridgeState{
+		InstanceID: instanceID,
+		BridgeType: types.BridgeTypeNative,
+		SrcChain:   "neo_n3",
+		DstChain:   "neo_x",
+		SourceState: &types.ChainState{
+			Nonce:       42,
+			BlockNumber: 1000,
+			TxHash:      "0xabc123",
+			ObservedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			IndexedAt:   time.Now(),
+		},
+	}
+	if err := bss.SaveBridgeState(state); err != nil {
+		t.Fatalf("save bridge state: %v", err)
+	}
+
+	// Save a pending native operation
+	op := sampleOp()
+	if err := os.SaveOperation(op); err != nil {
+		t.Fatalf("save operation: %v", err)
+	}
+
+	// Update operation completion
+	completionTime := time.Date(2026, 1, 1, 0, 5, 0, 0, time.UTC)
+	err := os.UpdateOperationCompletion(
+		types.BridgeTypeNative, types.DirectionDeposit, 42,
+		2000, "0xdest", completionTime,
+	)
+	if err != nil {
+		t.Fatalf("update completion: %v", err)
+	}
+
+	// Assert: operation status is completed
+	got, _ := os.GetOperation(types.BridgeTypeNative, types.DirectionDeposit, 42)
+	if got.Status != types.StatusCompleted {
+		t.Fatalf("expected completed, got %s", got.Status)
+	}
+	if got.DestBlockHeight == nil || *got.DestBlockHeight != 2000 {
+		t.Fatalf("expected dest block 2000")
+	}
+	if got.DestTxHash == nil || *got.DestTxHash != "0xdest" {
+		t.Fatalf("expected dest tx hash 0xdest")
+	}
+
+	// Assert: bridge state has DestState set
+	gotState, err := bss.GetBridgeState(instanceID)
+	if err != nil {
+		t.Fatalf("get bridge state: %v", err)
+	}
+	if gotState.DestState == nil {
+		t.Fatalf("expected DestState to be set")
+	}
+	if gotState.DestState.BlockNumber != 2000 {
+		t.Fatalf("expected dest block 2000, got %d", gotState.DestState.BlockNumber)
+	}
+	if gotState.DestState.TxHash != "0xdest" {
+		t.Fatalf("expected dest tx hash 0xdest, got %s", gotState.DestState.TxHash)
+	}
+
+	// Assert: SourceState is still intact
+	if gotState.SourceState == nil {
+		t.Fatalf("expected SourceState to be preserved")
+	}
+	if gotState.SourceState.BlockNumber != 1000 {
+		t.Fatalf("expected source block 1000, got %d", gotState.SourceState.BlockNumber)
+	}
+}
+
+func TestOperationStore_UpdateCompletionWithBridgeState_TokenPair(t *testing.T) {
+	s := newTestStore(t)
+	bss := NewBridgeStateStore(s)
+	os := NewOperationStore(s, bss)
+
+	// Create a pending token operation with token contracts
+	op := sampleOp()
+	op.BridgeType = types.BridgeTypeToken
+	op.Nonce = 99
+	srcToken := "0xSrc"
+	dstToken := "0xDst"
+	op.TokenContract = &srcToken
+	op.DestTokenContract = &dstToken
+
+	if err := os.SaveOperation(op); err != nil {
+		t.Fatalf("save operation: %v", err)
+	}
+
+	// Update operation completion
+	completionTime := time.Date(2026, 1, 1, 0, 5, 0, 0, time.UTC)
+	err := os.UpdateOperationCompletion(
+		types.BridgeTypeToken, types.DirectionDeposit, 99,
+		3000, "0xtoken_dest", completionTime,
+	)
+	if err != nil {
+		t.Fatalf("update completion: %v", err)
+	}
+
+	// Assert: operation is completed
+	got, _ := os.GetOperation(types.BridgeTypeToken, types.DirectionDeposit, 99)
+	if got.Status != types.StatusCompleted {
+		t.Fatalf("expected completed, got %s", got.Status)
+	}
+
+	// Assert: bridge state stored under correct instance ID with token pair
+	instanceID := BuildInstanceID("token", "neo_n3", "neo_x", &srcToken, &dstToken)
+	gotState, err := bss.GetBridgeState(instanceID)
+	if err != nil {
+		t.Fatalf("get bridge state: %v", err)
+	}
+	if gotState.DestState == nil {
+		t.Fatalf("expected DestState to be set")
+	}
+	if gotState.DestState.BlockNumber != 3000 {
+		t.Fatalf("expected dest block 3000, got %d", gotState.DestState.BlockNumber)
+	}
+	if gotState.DestState.TxHash != "0xtoken_dest" {
+		t.Fatalf("expected dest tx hash 0xtoken_dest, got %s", gotState.DestState.TxHash)
+	}
+}
+
+func TestOperationStore_UpdateCompletionWithoutBridgeState(t *testing.T) {
+	s := newTestStore(t)
+	// Create OperationStore with nil bridgeStateStore
+	os := NewOperationStore(s, nil)
+
+	// Save a pending operation
+	op := sampleOp()
+	op.Nonce = 77
+	if err := os.SaveOperation(op); err != nil {
+		t.Fatalf("save operation: %v", err)
+	}
+
+	// Update operation completion (should not panic)
+	completionTime := time.Date(2026, 1, 1, 0, 5, 0, 0, time.UTC)
+	err := os.UpdateOperationCompletion(
+		types.BridgeTypeNative, types.DirectionDeposit, 77,
+		5000, "0xno_bridge_state", completionTime,
+	)
+	if err != nil {
+		t.Fatalf("update completion: %v", err)
+	}
+
+	// Assert: operation is completed normally
+	got, _ := os.GetOperation(types.BridgeTypeNative, types.DirectionDeposit, 77)
+	if got.Status != types.StatusCompleted {
+		t.Fatalf("expected completed, got %s", got.Status)
+	}
+	if got.DestBlockHeight == nil || *got.DestBlockHeight != 5000 {
+		t.Fatalf("expected dest block 5000")
+	}
+	if got.DestTxHash == nil || *got.DestTxHash != "0xno_bridge_state" {
+		t.Fatalf("expected dest tx hash 0xno_bridge_state")
 	}
 }

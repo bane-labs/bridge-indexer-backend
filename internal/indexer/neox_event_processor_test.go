@@ -29,7 +29,7 @@ func newTestNeoXProcessor(t *testing.T) (*NeoXEventProcessorImpl, *datastore.Ope
 	}
 	t.Cleanup(func() { db.Close() })
 	store := datastore.NewStoreFromDB(db, slog.Default())
-	opStore := datastore.NewOperationStore(store)
+	opStore := datastore.NewOperationStore(store, nil)
 	proc := NewNeoXEventProcessor(opStore, store, testTokenBridgeAddr, testMessageBridgeAddr, slog.Default())
 	return proc, opStore, store
 }

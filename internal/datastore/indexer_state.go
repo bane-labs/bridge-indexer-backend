@@ -50,3 +50,28 @@ func (s *Store) SaveIndexerStateWithOperations(state *types.IndexerState, ops []
 
 	return s.BatchWrite(writeOps)
 }
+
+// SaveIndexerStateWithOperationsAndExtra atomically saves an indexer checkpoint,
+// bridge operations, and additional write operations (e.g., bridge state updates)
+// in a single batch.
+func (s *Store) SaveIndexerStateWithOperationsAndExtra(state *types.IndexerState, ops []*types.BridgeOperation, extra []WriteOp) error {
+	writeOps := make([]WriteOp, 0, 1+len(ops)*2+len(extra))
+
+	writeOps = append(writeOps, WriteOp{
+		Key:   indexerStateKey(state.Chain),
+		Value: state,
+	})
+
+	for _, op := range ops {
+		opKey := operationKey(op.BridgeType, op.Direction, op.Nonce)
+		idxKey := statusIndexKey(op.Status, op.BridgeType, op.Direction, op.Nonce)
+		writeOps = append(writeOps,
+			WriteOp{Key: opKey, Value: op},
+			WriteOp{Key: idxKey, Value: []byte{}},
+		)
+	}
+
+	writeOps = append(writeOps, extra...)
+
+	return s.BatchWrite(writeOps)
+}

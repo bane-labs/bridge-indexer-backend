@@ -66,14 +66,14 @@ func TestServerStartup_BootAndShutdown(t *testing.T) {
 
 	// 4. Indexers — created but NOT started
 	n3Contracts := []string{testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash()}
-	n3Indexer, err := indexer.NewN3Indexer(n3Client, store, opStore, n3EventProc, n3Contracts, 0, 1, logger)
+	n3Indexer, err := indexer.NewN3Indexer(n3Client, store, opStore, nil, n3EventProc, n3Contracts, 0, 1, logger)
 	if err != nil {
 		t.Fatalf("NewN3Indexer: %v", err)
 	}
 	_ = n3Indexer
 
 	neoxContracts := []string{testutil.NeoXTokenBridgeAddr, testutil.NeoXMessageBridgeAddr}
-	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, neoxEventProc, neoxContracts, 0, 1, logger)
+	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, nil, neoxEventProc, neoxContracts, 0, 1, logger)
 	_ = neoxIndexer
 
 	// 5. Monitor components — created but NOT started

@@ -25,6 +25,7 @@ import (
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 	"github.com/bane-labs/bridge-indexer-backend/internal/indexer"
 	"github.com/bane-labs/bridge-indexer-backend/internal/monitor"
+	"github.com/bane-labs/bridge-indexer-backend/internal/types"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/n3"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/neox"
 )
@@ -86,8 +87,34 @@ func run(cmd *cobra.Command, args []string) error {
 			logger.Error("Failed to close datastore", "error", closeErr)
 		}
 	}()
-	opStore := datastore.NewOperationStore(store)
+	bridgeStateStore := datastore.NewBridgeStateStore(store)
+	opStore := datastore.NewOperationStore(store, bridgeStateStore)
 	logger.Info("Database initialized", "path", cfg.DBPath)
+
+	// Initialize static directional bridge instances (native + message × deposit + withdrawal).
+	for _, inst := range []struct {
+		bt, src, dst string
+	}{
+		{"native", "neo_n3", "neo_x"},
+		{"native", "neo_x", "neo_n3"},
+		{"message", "neo_n3", "neo_x"},
+		{"message", "neo_x", "neo_n3"},
+	} {
+		id := datastore.BuildInstanceID(inst.bt, inst.src, inst.dst, nil, nil)
+		if _, err := bridgeStateStore.GetBridgeState(id); err == datastore.ErrNotFound {
+			initState := &types.DirectionalBridgeState{
+				InstanceID: id,
+				BridgeType: types.BridgeType(inst.bt),
+				SrcChain:   inst.src,
+				DstChain:   inst.dst,
+			}
+			if initErr := bridgeStateStore.SaveBridgeState(initState); initErr != nil {
+				logger.Warn("Failed to initialize bridge state", "instance_id", id, "error", initErr)
+			}
+		} else if err != nil {
+			logger.Error("Failed to check bridge state at startup", "instance_id", id, "error", err)
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -121,7 +148,7 @@ func run(cmd *cobra.Command, args []string) error {
 		strings.TrimPrefix(cfg.N3NeoXBridge, "0x"),
 		strings.TrimPrefix(cfg.N3MessageBridge, "0x"),
 	}
-	n3Indexer, err := indexer.NewN3Indexer(n3Client, store, opStore, n3EventProc, n3Contracts, cfg.N3StartBlock, cfg.N3SyncConcurrency, logger)
+	n3Indexer, err := indexer.NewN3Indexer(n3Client, store, opStore, bridgeStateStore, n3EventProc, n3Contracts, cfg.N3StartBlock, cfg.N3SyncConcurrency, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create N3 indexer: %w", err)
 	}
@@ -129,7 +156,7 @@ func run(cmd *cobra.Command, args []string) error {
 	neoxEventProc := indexer.NewNeoXEventProcessor(opStore, store, cfg.NeoXTokenBridge, cfg.NeoXMessageBridge, logger)
 	neoxContracts := []string{cfg.NeoXTokenBridge, cfg.NeoXMessageBridge}
 	pauseDetector := monitor.NewPauseDetector(store, logger)
-	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, neoxEventProc, neoxContracts, cfg.NeoXStartBlock, cfg.NeoXSyncConcurrency, logger, pauseDetector)
+	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, bridgeStateStore, neoxEventProc, neoxContracts, cfg.NeoXStartBlock, cfg.NeoXSyncConcurrency, logger, pauseDetector)
 
 	var alerters []alerter.Alerter
 	if cfg.DiscordConfigured() {
@@ -336,7 +363,7 @@ func runBackfill(cmd *cobra.Command, args []string) error {
 			logger.Error("Failed to close datastore", "error", closeErr)
 		}
 	}()
-	opStore := datastore.NewOperationStore(store)
+	opStore := datastore.NewOperationStore(store, nil) // nil: backfill does not call UpdateOperationCompletion, so no dest bridge state updates needed
 	logger.Info("Database initialized", "path", cfg.DBPath)
 
 	ctx, cancel := context.WithCancel(context.Background())

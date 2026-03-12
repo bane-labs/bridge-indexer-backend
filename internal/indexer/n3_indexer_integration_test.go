@@ -32,7 +32,7 @@ func TestN3Indexer_ProcessBlock_WithEvents(t *testing.T) {
 	}
 
 	contractHashes := []string{testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash()}
-	idx, err := NewN3Indexer(client, store, opStore, proc, contractHashes, 0, 1, slog.Default())
+	idx, err := NewN3Indexer(client, store, opStore, nil, proc, contractHashes, 0, 1, slog.Default())
 	if err != nil {
 		t.Fatalf("NewN3Indexer: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestN3Indexer_ProcessBlock_NoEvents(t *testing.T) {
 	}
 
 	contractHashes := []string{testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash()}
-	idx, err := NewN3Indexer(client, store, opStore, proc, contractHashes, 0, 1, slog.Default())
+	idx, err := NewN3Indexer(client, store, opStore, nil, proc, contractHashes, 0, 1, slog.Default())
 	if err != nil {
 		t.Fatalf("NewN3Indexer: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestN3Indexer_ProcessBlock_Sequential(t *testing.T) {
 	}
 
 	contractHashes := []string{testutil.N3NeoXBridgeHash(), testutil.N3MessageBridgeHash()}
-	idx, err := NewN3Indexer(client, store, opStore, proc, contractHashes, 0, 1, slog.Default())
+	idx, err := NewN3Indexer(client, store, opStore, nil, proc, contractHashes, 0, 1, slog.Default())
 	if err != nil {
 		t.Fatalf("NewN3Indexer: %v", err)
 	}

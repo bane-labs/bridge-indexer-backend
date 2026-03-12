@@ -34,7 +34,7 @@ func setupNeoXIndexer(t *testing.T, ctx context.Context) *NeoXIndexer {
 	)
 
 	contractAddrs := []string{testutil.NeoXTokenBridgeAddr, testutil.NeoXMessageBridgeAddr}
-	return NewNeoXIndexer(client, store, opStore, proc, contractAddrs, 0, 1, slog.Default())
+	return NewNeoXIndexer(client, store, opStore, nil, proc, contractAddrs, 0, 1, slog.Default())
 }
 
 func TestNeoXIndexer_ProcessBlockRange_WithEvents(t *testing.T) {
