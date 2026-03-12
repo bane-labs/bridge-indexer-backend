@@ -16,17 +16,18 @@ import (
 
 // Client wraps a pool of Neo N3 RPC connections for concurrent use.
 type Client struct {
-	pool      []*rpcclient.Client
-	endpoints []string
-	poolSize  int
-	counter   atomic.Uint64
-	logger    *slog.Logger
+	pool         []*rpcclient.Client
+	endpoints    []string
+	poolSize     int
+	counter      atomic.Uint64
+	logger       *slog.Logger
+	callInterval time.Duration
 }
 
 // NewClient creates a Client with a pool of poolSize RPC connections,
 // distributed evenly across the provided endpoints.
 // At least one connection must succeed or an error is returned.
-func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *slog.Logger) (*Client, error) {
+func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *slog.Logger, callInterval time.Duration) (*Client, error) {
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("no Neo N3 RPC endpoints provided")
 	}
@@ -38,9 +39,10 @@ func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *sl
 	}
 
 	c := &Client{
-		endpoints: endpoints,
-		poolSize:  poolSize,
-		logger:    logger,
+		endpoints:    endpoints,
+		poolSize:     poolSize,
+		logger:       logger,
+		callInterval: callInterval,
 	}
 
 	pool := make([]*rpcclient.Client, 0, poolSize)
@@ -93,6 +95,13 @@ func retry[T any](c *Client, ctx context.Context, op func(rpc *rpcclient.Client)
 	var zero T
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt == 0 && c.callInterval > 0 {
+			select {
+			case <-time.After(c.callInterval):
+			case <-ctx.Done():
+				return zero, ctx.Err()
+			}
+		}
 		rpc := c.pick()
 		val, err := op(rpc)
 		if err == nil {

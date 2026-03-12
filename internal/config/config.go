@@ -34,6 +34,8 @@ type rawConfig struct {
 	N3StartBlock          int    `mapstructure:"N3_START_BLOCK"`
 	NeoXStartBlock        int    `mapstructure:"NEOX_START_BLOCK"`
 	NeoXSyncConcurrency   int    `mapstructure:"NEOX_SYNC_CONCURRENCY"`
+	N3RPCCallIntervalMs   int    `mapstructure:"N3_RPC_CALL_INTERVAL_MS"`
+	NeoXRPCCallIntervalMs int    `mapstructure:"NEOX_RPC_CALL_INTERVAL_MS"`
 }
 
 type Config struct {
@@ -57,6 +59,8 @@ type Config struct {
 	N3StartBlock        uint64
 	NeoXStartBlock      uint64
 	NeoXSyncConcurrency int
+	N3RPCCallInterval   time.Duration
+	NeoXRPCCallInterval time.Duration
 }
 
 // envKeys lists all environment variable names. Used by BindEnv so that
@@ -82,6 +86,8 @@ var envKeys = []string{
 	"N3_START_BLOCK",
 	"NEOX_START_BLOCK",
 	"NEOX_SYNC_CONCURRENCY",
+	"N3_RPC_CALL_INTERVAL_MS",
+	"NEOX_RPC_CALL_INTERVAL_MS",
 }
 
 func SetDefaults(v *viper.Viper) {
@@ -95,6 +101,8 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("N3_MESSAGE_BRIDGE", "0xde9cc59df7484ae2f2d2c1ce7a66dccbd5c8bd11")
 	v.SetDefault("N3_SYNC_CONCURRENCY", 200)
 	v.SetDefault("NEOX_SYNC_CONCURRENCY", 20)
+	v.SetDefault("N3_RPC_CALL_INTERVAL_MS", 100)
+	v.SetDefault("NEOX_RPC_CALL_INTERVAL_MS", 100)
 }
 
 func Load(v *viper.Viper) (*Config, error) {
@@ -150,6 +158,8 @@ func Load(v *viper.Viper) (*Config, error) {
 		N3StartBlock:        uint64(raw.N3StartBlock),
 		NeoXStartBlock:      uint64(raw.NeoXStartBlock),
 		NeoXSyncConcurrency: raw.NeoXSyncConcurrency,
+		N3RPCCallInterval:   clampDuration(raw.N3RPCCallIntervalMs),
+		NeoXRPCCallInterval: clampDuration(raw.NeoXRPCCallIntervalMs),
 	}
 
 	return cfg, nil
@@ -224,4 +234,11 @@ func parseCommaSeparated(s string) []string {
 		return nil
 	}
 	return result
+}
+
+func clampDuration(ms int) time.Duration {
+	if ms < 0 {
+		return 0
+	}
+	return time.Duration(ms) * time.Millisecond
 }

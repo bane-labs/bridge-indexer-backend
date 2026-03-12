@@ -15,20 +15,22 @@ import (
 )
 
 type Client struct {
-	eth       *ethclient.Client
-	endpoints []string
-	active    int
-	logger    *slog.Logger
+	eth          *ethclient.Client
+	endpoints    []string
+	active       int
+	logger       *slog.Logger
+	callInterval time.Duration
 }
 
-func NewClient(ctx context.Context, endpoints []string, logger *slog.Logger) (*Client, error) {
+func NewClient(ctx context.Context, endpoints []string, logger *slog.Logger, callInterval time.Duration) (*Client, error) {
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("no Neo X RPC endpoints provided")
 	}
 
 	c := &Client{
-		endpoints: endpoints,
-		logger:    logger,
+		endpoints:    endpoints,
+		logger:       logger,
+		callInterval: callInterval,
 	}
 
 	if err := c.connect(ctx, 0); err != nil {
@@ -69,6 +71,13 @@ func retryEVM[T any](c *Client, ctx context.Context, op func() (T, error)) (T, e
 	var zero T
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt == 0 && c.callInterval > 0 {
+			select {
+			case <-time.After(c.callInterval):
+			case <-ctx.Done():
+				return zero, ctx.Err()
+			}
+		}
 		val, err := op()
 		if err == nil {
 			return val, nil
