@@ -58,7 +58,7 @@ func TestServerStartup_BootAndShutdown(t *testing.T) {
 		t.Fatalf("NewN3EventProcessor: %v", err)
 	}
 	neoxEventProc := indexer.NewNeoXEventProcessor(
-		opStore, store,
+		opStore,
 		testutil.NeoXTokenBridgeAddr,
 		testutil.NeoXMessageBridgeAddr,
 		logger,

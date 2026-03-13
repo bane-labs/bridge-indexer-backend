@@ -10,19 +10,18 @@ import (
 	"github.com/nspcc-dev/neo-go/pkg/util"
 	"github.com/nspcc-dev/neo-go/pkg/vm/stackitem"
 
-	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
 )
 
 type N3EventProcessorImpl struct {
-	opStore       *datastore.OperationStore
+	storer        EventStorer
 	neoXBridge    util.Uint160
 	messageBridge util.Uint160
 	logger        *slog.Logger
 }
 
 func NewN3EventProcessor(
-	opStore *datastore.OperationStore,
+	storer EventStorer,
 	neoXBridgeHash string,
 	messageBridgeHash string,
 	logger *slog.Logger,
@@ -36,7 +35,7 @@ func NewN3EventProcessor(
 		return nil, fmt.Errorf("invalid MessageBridge hash: %w", err)
 	}
 	return &N3EventProcessorImpl{
-		opStore:       opStore,
+		storer:        storer,
 		neoXBridge:    nxb,
 		messageBridge: mb,
 		logger:        logger,
@@ -264,7 +263,7 @@ func (p *N3EventProcessorImpl) handleNativeWithdrawalComplete(
 	}
 
 	destBlock := uint64(blockHeight)
-	err = p.opStore.UpdateOperationCompletion(
+	err = p.storer.UpdateOperationCompletion(
 		types.BridgeTypeNative, types.DirectionWithdrawal, nonce,
 		destBlock, txHash, blockTime,
 	)
@@ -301,7 +300,7 @@ func (p *N3EventProcessorImpl) handleTokenWithdrawalComplete(
 	}
 
 	destBlock := uint64(blockHeight)
-	err = p.opStore.UpdateOperationCompletion(
+	err = p.storer.UpdateOperationCompletion(
 		types.BridgeTypeToken, types.DirectionWithdrawal, nonce,
 		destBlock, txHash, blockTime,
 	)
@@ -389,7 +388,7 @@ func (p *N3EventProcessorImpl) handleN3Execution(
 	}
 
 	destBlock := uint64(blockHeight)
-	err = p.opStore.UpdateOperationCompletion(
+	err = p.storer.UpdateOperationCompletion(
 		types.BridgeTypeMessage, types.DirectionWithdrawal, nonce,
 		destBlock, txHash, blockTime,
 	)

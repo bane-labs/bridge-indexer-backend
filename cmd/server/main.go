@@ -153,7 +153,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create N3 indexer: %w", err)
 	}
 
-	neoxEventProc := indexer.NewNeoXEventProcessor(opStore, store, cfg.NeoXTokenBridge, cfg.NeoXMessageBridge, logger)
+	neoxEventProc := indexer.NewNeoXEventProcessor(opStore, cfg.NeoXTokenBridge, cfg.NeoXMessageBridge, logger)
 	neoxContracts := []string{cfg.NeoXTokenBridge, cfg.NeoXMessageBridge}
 	pauseDetector := monitor.NewPauseDetector(store, logger)
 	neoxIndexer := indexer.NewNeoXIndexer(neoxClient, store, opStore, bridgeStateStore, neoxEventProc, neoxContracts, cfg.NeoXStartBlock, cfg.NeoXSyncConcurrency, logger, pauseDetector)

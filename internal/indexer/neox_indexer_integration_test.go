@@ -27,7 +27,7 @@ func setupNeoXIndexer(t *testing.T, ctx context.Context) *NeoXIndexer {
 	store, opStore := testutil.NewTestStore(t)
 
 	proc := NewNeoXEventProcessor(
-		opStore, store,
+		opStore,
 		testutil.NeoXTokenBridgeAddr,
 		testutil.NeoXMessageBridgeAddr,
 		slog.Default(),
