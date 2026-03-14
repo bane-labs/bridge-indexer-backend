@@ -115,11 +115,22 @@ func (idx *N3Indexer) runSerial(ctx context.Context, startHeight uint32) error {
 			continue
 		}
 
+		iterCount := 0
 		for height <= chainHeight {
 			select {
 			case <-ctx.Done():
 				return nil
 			default:
+			}
+
+			iterCount++
+			if iterCount%10 == 0 {
+				newBlockCount, err := idx.client.GetBlockCount(ctx)
+				if err != nil {
+					idx.logger.Warn("Failed to refresh N3 chain height", "error", err)
+				} else {
+					chainHeight = newBlockCount - 1
+				}
 			}
 
 			if err := idx.processBlock(ctx, height); err != nil {

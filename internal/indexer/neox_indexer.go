@@ -88,6 +88,7 @@ func (idx *NeoXIndexer) Start(ctx context.Context) error {
 // runSerial is the original serial loop (concurrency=1 fallback).
 func (idx *NeoXIndexer) runSerial(ctx context.Context, startHeight uint64) error {
 	height := startHeight
+	iterCount := 0
 
 	for {
 		select {
@@ -123,6 +124,22 @@ func (idx *NeoXIndexer) runSerial(ctx context.Context, startHeight uint64) error
 			idx.logger.Error("Failed to process NeoX block range", "from", height, "to", endHeight, "error", err)
 			time.Sleep(5 * time.Second)
 			continue
+		}
+
+		iterCount++
+		if iterCount%10 == 0 {
+			newChainHeight, err := idx.client.BlockNumber(ctx)
+			if err != nil {
+				idx.logger.Warn("Failed to refresh NeoX chain height", "error", err)
+			} else {
+				newSafeHeight := uint64(0)
+				if newChainHeight > neoxSafetyDepth {
+					newSafeHeight = newChainHeight - neoxSafetyDepth
+				}
+				if newSafeHeight > safeHeight {
+					safeHeight = newSafeHeight
+				}
+			}
 		}
 
 		if interval := idx.client.CallInterval(); interval > 0 {
