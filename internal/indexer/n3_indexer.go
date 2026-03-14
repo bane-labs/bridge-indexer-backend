@@ -131,6 +131,15 @@ func (idx *N3Indexer) runSerial(ctx context.Context, startHeight uint32) error {
 				time.Sleep(5 * time.Second)
 				break
 			}
+
+			if interval := idx.client.CallInterval(); interval > 0 {
+				select {
+				case <-time.After(interval):
+				case <-ctx.Done():
+					return nil
+				}
+			}
+
 			height++
 		}
 	}

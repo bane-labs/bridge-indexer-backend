@@ -128,6 +128,14 @@ func (idx *NeoXIndexer) runSerial(ctx context.Context, startHeight uint64) error
 			continue
 		}
 
+		if interval := idx.client.CallInterval(); interval > 0 {
+			select {
+			case <-time.After(interval):
+			case <-ctx.Done():
+				return nil
+			}
+		}
+
 		height = endHeight + 1
 	}
 }
