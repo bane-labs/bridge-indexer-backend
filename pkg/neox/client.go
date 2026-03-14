@@ -71,13 +71,6 @@ func retryEVM[T any](c *Client, ctx context.Context, op func() (T, error)) (T, e
 	var zero T
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt == 0 && c.callInterval > 0 {
-			select {
-			case <-time.After(c.callInterval):
-			case <-ctx.Done():
-				return zero, ctx.Err()
-			}
-		}
 		val, err := op()
 		if err == nil {
 			return val, nil
@@ -125,6 +118,11 @@ func (c *Client) Close() {
 	if c.eth != nil {
 		c.eth.Close()
 	}
+}
+
+// CallInterval returns the configured interval between RPC calls.
+func (c *Client) CallInterval() time.Duration {
+	return c.callInterval
 }
 
 func HexToAddresses(hexAddrs []string) []common.Address {

@@ -95,13 +95,6 @@ func retry[T any](c *Client, ctx context.Context, op func(rpc *rpcclient.Client)
 	var zero T
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt == 0 && c.callInterval > 0 {
-			select {
-			case <-time.After(c.callInterval):
-			case <-ctx.Done():
-				return zero, ctx.Err()
-			}
-		}
 		rpc := c.pick()
 		val, err := op(rpc)
 		if err == nil {
@@ -143,4 +136,9 @@ func (c *Client) Close() {
 			rpc.Close()
 		}
 	}
+}
+
+// CallInterval returns the configured interval between RPC calls.
+func (c *Client) CallInterval() time.Duration {
+	return c.callInterval
 }
