@@ -16,17 +16,18 @@ import (
 
 // Client wraps a pool of Neo N3 RPC connections for concurrent use.
 type Client struct {
-	pool      []*rpcclient.Client
-	endpoints []string
-	poolSize  int
-	counter   atomic.Uint64
-	logger    *slog.Logger
+	pool         []*rpcclient.Client
+	endpoints    []string
+	poolSize     int
+	counter      atomic.Uint64
+	logger       *slog.Logger
+	callInterval time.Duration
 }
 
 // NewClient creates a Client with a pool of poolSize RPC connections,
 // distributed evenly across the provided endpoints.
 // At least one connection must succeed or an error is returned.
-func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *slog.Logger) (*Client, error) {
+func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *slog.Logger, callInterval time.Duration) (*Client, error) {
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("no Neo N3 RPC endpoints provided")
 	}
@@ -38,9 +39,10 @@ func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *sl
 	}
 
 	c := &Client{
-		endpoints: endpoints,
-		poolSize:  poolSize,
-		logger:    logger,
+		endpoints:    endpoints,
+		poolSize:     poolSize,
+		logger:       logger,
+		callInterval: callInterval,
 	}
 
 	pool := make([]*rpcclient.Client, 0, poolSize)
@@ -134,4 +136,9 @@ func (c *Client) Close() {
 			rpc.Close()
 		}
 	}
+}
+
+// CallInterval returns the configured interval between RPC calls.
+func (c *Client) CallInterval() time.Duration {
+	return c.callInterval
 }

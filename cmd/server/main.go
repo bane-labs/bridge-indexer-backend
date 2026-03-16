@@ -72,6 +72,8 @@ func run(cmd *cobra.Command, args []string) error {
 		"n3_endpoints", len(cfg.N3RPCEndpoints),
 		"neox_endpoints", len(cfg.NeoXRPCEndpoints),
 		"db_path", cfg.DBPath,
+		"n3_rpc_interval", cfg.N3RPCCallInterval,
+		"neox_rpc_interval", cfg.NeoXRPCCallInterval,
 	)
 
 	if err := os.MkdirAll(cfg.DBPath, 0o755); err != nil {
@@ -123,13 +125,13 @@ func run(cmd *cobra.Command, args []string) error {
 	if n3PoolSize > 500 {
 		n3PoolSize = 500
 	}
-	n3Client, err := n3.NewClient(ctx, cfg.N3RPCEndpoints, n3PoolSize, logger)
+	n3Client, err := n3.NewClient(ctx, cfg.N3RPCEndpoints, n3PoolSize, logger, cfg.N3RPCCallInterval)
 	if err != nil {
 		return fmt.Errorf("failed to create Neo N3 client: %w", err)
 	}
 	defer n3Client.Close()
 
-	neoxClient, err := neox.NewClient(ctx, cfg.NeoXRPCEndpoints, logger)
+	neoxClient, err := neox.NewClient(ctx, cfg.NeoXRPCEndpoints, logger, cfg.NeoXRPCCallInterval)
 	if err != nil {
 		return fmt.Errorf("failed to create Neo X client: %w", err)
 	}
@@ -369,13 +371,13 @@ func runBackfill(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	n3Client, err := n3.NewClient(ctx, cfg.N3RPCEndpoints, 100, logger)
+	n3Client, err := n3.NewClient(ctx, cfg.N3RPCEndpoints, 100, logger, cfg.N3RPCCallInterval)
 	if err != nil {
 		return fmt.Errorf("failed to create Neo N3 client: %w", err)
 	}
 	defer n3Client.Close()
 
-	neoxClient, err := neox.NewClient(ctx, cfg.NeoXRPCEndpoints, logger)
+	neoxClient, err := neox.NewClient(ctx, cfg.NeoXRPCEndpoints, logger, cfg.NeoXRPCCallInterval)
 	if err != nil {
 		return fmt.Errorf("failed to create Neo X client: %w", err)
 	}

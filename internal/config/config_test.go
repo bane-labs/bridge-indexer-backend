@@ -388,3 +388,55 @@ func TestConfig_NegativeStartBlock(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadConfig_RPCCallIntervalDefaults(t *testing.T) {
+	setRequiredEnv(t)
+
+	cfg, err := Load(newViper())
+	if err != nil {
+		t.Fatalf("Load(newViper()) returned error: %v", err)
+	}
+
+	if cfg.N3RPCCallInterval != 100*time.Millisecond {
+		t.Errorf("N3RPCCallInterval = %v, want 100ms", cfg.N3RPCCallInterval)
+	}
+	if cfg.NeoXRPCCallInterval != 100*time.Millisecond {
+		t.Errorf("NeoXRPCCallInterval = %v, want 100ms", cfg.NeoXRPCCallInterval)
+	}
+}
+
+func TestLoadConfig_RPCCallIntervalCustom(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("N3_RPC_CALL_INTERVAL_MS", "200")
+	t.Setenv("NEOX_RPC_CALL_INTERVAL_MS", "0")
+
+	cfg, err := Load(newViper())
+	if err != nil {
+		t.Fatalf("Load(newViper()) returned error: %v", err)
+	}
+
+	if cfg.N3RPCCallInterval != 200*time.Millisecond {
+		t.Errorf("N3RPCCallInterval = %v, want 200ms", cfg.N3RPCCallInterval)
+	}
+	if cfg.NeoXRPCCallInterval != 0 {
+		t.Errorf("NeoXRPCCallInterval = %v, want 0", cfg.NeoXRPCCallInterval)
+	}
+}
+
+func TestLoadConfig_RPCCallIntervalNegativeClamped(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("N3_RPC_CALL_INTERVAL_MS", "-50")
+	t.Setenv("NEOX_RPC_CALL_INTERVAL_MS", "-100")
+
+	cfg, err := Load(newViper())
+	if err != nil {
+		t.Fatalf("Load(newViper()) returned error: %v", err)
+	}
+
+	if cfg.N3RPCCallInterval != 0 {
+		t.Errorf("N3RPCCallInterval = %v, want 0 (clamped from -50)", cfg.N3RPCCallInterval)
+	}
+	if cfg.NeoXRPCCallInterval != 0 {
+		t.Errorf("NeoXRPCCallInterval = %v, want 0 (clamped from -100)", cfg.NeoXRPCCallInterval)
+	}
+}

@@ -15,20 +15,22 @@ import (
 )
 
 type Client struct {
-	eth       *ethclient.Client
-	endpoints []string
-	active    int
-	logger    *slog.Logger
+	eth          *ethclient.Client
+	endpoints    []string
+	active       int
+	logger       *slog.Logger
+	callInterval time.Duration
 }
 
-func NewClient(ctx context.Context, endpoints []string, logger *slog.Logger) (*Client, error) {
+func NewClient(ctx context.Context, endpoints []string, logger *slog.Logger, callInterval time.Duration) (*Client, error) {
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("no Neo X RPC endpoints provided")
 	}
 
 	c := &Client{
-		endpoints: endpoints,
-		logger:    logger,
+		endpoints:    endpoints,
+		logger:       logger,
+		callInterval: callInterval,
 	}
 
 	if err := c.connect(ctx, 0); err != nil {
@@ -116,6 +118,11 @@ func (c *Client) Close() {
 	if c.eth != nil {
 		c.eth.Close()
 	}
+}
+
+// CallInterval returns the configured interval between RPC calls.
+func (c *Client) CallInterval() time.Duration {
+	return c.callInterval
 }
 
 func HexToAddresses(hexAddrs []string) []common.Address {
