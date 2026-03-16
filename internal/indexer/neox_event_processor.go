@@ -10,7 +10,6 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 
-	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
 )
 
@@ -49,23 +48,20 @@ type PauseState struct {
 }
 
 type NeoXEventProcessorImpl struct {
-	opStore       *datastore.OperationStore
-	store         *datastore.Store
+	storer        EventStorer
 	tokenBridge   common.Address
 	messageBridge common.Address
 	logger        *slog.Logger
 }
 
 func NewNeoXEventProcessor(
-	opStore *datastore.OperationStore,
-	store *datastore.Store,
+	storer EventStorer,
 	tokenBridgeAddr string,
 	messageBridgeAddr string,
 	logger *slog.Logger,
 ) *NeoXEventProcessorImpl {
 	return &NeoXEventProcessorImpl{
-		opStore:       opStore,
-		store:         store,
+		storer:        storer,
 		tokenBridge:   common.HexToAddress(tokenBridgeAddr),
 		messageBridge: common.HexToAddress(messageBridgeAddr),
 		logger:        logger,
@@ -203,7 +199,7 @@ func (p *NeoXEventProcessorImpl) handleNativeDepositComplete(log ethtypes.Log, b
 	nonce := new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64()
 	destBlock := log.BlockNumber
 
-	err := p.opStore.UpdateOperationCompletion(
+	err := p.storer.UpdateOperationCompletion(
 		types.BridgeTypeNative, types.DirectionDeposit, nonce,
 		destBlock, log.TxHash.Hex(), blockTime,
 	)
@@ -273,7 +269,7 @@ func (p *NeoXEventProcessorImpl) handleTokenDepositComplete(log ethtypes.Log, bl
 	nonce := new(big.Int).SetBytes(log.Topics[2].Bytes()).Uint64()
 	destBlock := log.BlockNumber
 
-	err := p.opStore.UpdateOperationCompletion(
+	err := p.storer.UpdateOperationCompletion(
 		types.BridgeTypeToken, types.DirectionDeposit, nonce,
 		destBlock, log.TxHash.Hex(), blockTime,
 	)
@@ -326,7 +322,7 @@ func (p *NeoXEventProcessorImpl) handleMessageExecution(log ethtypes.Log, blockT
 	nonce := new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64()
 	destBlock := log.BlockNumber
 
-	err := p.opStore.UpdateOperationCompletion(
+	err := p.storer.UpdateOperationCompletion(
 		types.BridgeTypeMessage, types.DirectionDeposit, nonce,
 		destBlock, log.TxHash.Hex(), blockTime,
 	)

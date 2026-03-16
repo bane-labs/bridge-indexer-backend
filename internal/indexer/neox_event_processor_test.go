@@ -19,7 +19,7 @@ const (
 	testMessageBridgeAddr = "0x1212000000000000000000000000000000000009"
 )
 
-func newTestNeoXProcessor(t *testing.T) (*NeoXEventProcessorImpl, *datastore.OperationStore, *datastore.Store) {
+func newTestNeoXProcessor(t *testing.T) (*NeoXEventProcessorImpl, *datastore.OperationStore) {
 	t.Helper()
 	opts := badger.DefaultOptions("").WithInMemory(true)
 	opts.Logger = nil
@@ -30,8 +30,8 @@ func newTestNeoXProcessor(t *testing.T) (*NeoXEventProcessorImpl, *datastore.Ope
 	t.Cleanup(func() { db.Close() })
 	store := datastore.NewStoreFromDB(db, slog.Default())
 	opStore := datastore.NewOperationStore(store, nil)
-	proc := NewNeoXEventProcessor(opStore, store, testTokenBridgeAddr, testMessageBridgeAddr, slog.Default())
-	return proc, opStore, store
+	proc := NewNeoXEventProcessor(opStore, testTokenBridgeAddr, testMessageBridgeAddr, slog.Default())
+	return proc, opStore
 }
 
 func padUint256(v uint64) common.Hash {
@@ -43,7 +43,7 @@ func padAddress(addr common.Address) common.Hash {
 }
 
 func TestNeoX_NativeWithdrawal(t *testing.T) {
-	proc, _, _ := newTestNeoXProcessor(t)
+	proc, _ := newTestNeoXProcessor(t)
 
 	to := common.HexToAddress("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	from := common.HexToAddress("0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
@@ -90,7 +90,7 @@ func TestNeoX_NativeWithdrawal(t *testing.T) {
 }
 
 func TestNeoX_TokenWithdrawal(t *testing.T) {
-	proc, _, _ := newTestNeoXProcessor(t)
+	proc, _ := newTestNeoXProcessor(t)
 
 	tokenAddr := common.HexToAddress("0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC")
 	to := common.HexToAddress("0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")
@@ -134,7 +134,7 @@ func TestNeoX_TokenWithdrawal(t *testing.T) {
 }
 
 func TestNeoX_MessageSend(t *testing.T) {
-	proc, _, _ := newTestNeoXProcessor(t)
+	proc, _ := newTestNeoXProcessor(t)
 
 	sender := common.HexToAddress("0x1111111111111111111111111111111111111111")
 
@@ -166,7 +166,7 @@ func TestNeoX_MessageSend(t *testing.T) {
 }
 
 func TestNeoX_NativeDepositComplete(t *testing.T) {
-	proc, opStore, _ := newTestNeoXProcessor(t)
+	proc, opStore := newTestNeoXProcessor(t)
 
 	pendingOp := &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeNative,
@@ -213,7 +213,7 @@ func TestNeoX_NativeDepositComplete(t *testing.T) {
 }
 
 func TestNeoX_PauseEvents(t *testing.T) {
-	proc, _, _ := newTestNeoXProcessor(t)
+	proc, _ := newTestNeoXProcessor(t)
 
 	tests := []struct {
 		name   string
@@ -253,7 +253,7 @@ func TestNeoX_PauseEvents(t *testing.T) {
 }
 
 func TestNeoX_RemovedLogIgnored(t *testing.T) {
-	proc, _, _ := newTestNeoXProcessor(t)
+	proc, _ := newTestNeoXProcessor(t)
 
 	log := ethtypes.Log{
 		Address: common.HexToAddress(testTokenBridgeAddr),
