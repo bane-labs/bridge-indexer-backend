@@ -388,6 +388,79 @@ func TestValidate_InvalidCORSOrigin(t *testing.T) {
 	}
 }
 
+func TestValidate_CORSOriginFormats(t *testing.T) {
+	tests := []struct {
+		name    string
+		origin  string
+		wantErr bool
+	}{
+		{
+			name:    "valid without trailing slash",
+			origin:  "https://app.example.com",
+			wantErr: false,
+		},
+		{
+			name:    "valid with trailing slash",
+			origin:  "https://app.example.com/",
+			wantErr: false,
+		},
+		{
+			name:    "invalid with path",
+			origin:  "https://app.example.com/path",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with query",
+			origin:  "https://app.example.com?query=1",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with fragment",
+			origin:  "https://app.example.com#fragment",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with userinfo",
+			origin:  "https://user@app.example.com",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with empty port",
+			origin:  "https://app.example.com:",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with non-numeric port",
+			origin:  "https://app.example.com:abc",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				N3RPCEndpoints:     []string{"http://seed1.neo.org:10332"},
+				NeoXRPCEndpoints:   []string{"https://rpc.example.com"},
+				CORSAllowedOrigins: []string{tt.origin},
+			}
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Validate() should fail for CORS origin %q", tt.origin)
+				}
+				if !strings.Contains(err.Error(), "CORS_ALLOWED_ORIGINS") {
+					t.Errorf("error %q should mention CORS_ALLOWED_ORIGINS", err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Validate() should succeed for CORS origin %q, got error: %v", tt.origin, err)
+				}
+			}
+		})
+	}
+}
+
 func TestParseCommaSeparated(t *testing.T) {
 	tests := []struct {
 		name  string
