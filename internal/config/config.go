@@ -235,11 +235,14 @@ func validateOriginURL(origin string) error {
 	if u.User != nil {
 		return fmt.Errorf("origin %q must not include user info", origin)
 	}
-	if u.Path != "" {
+	if u.Path != "" && u.Path != "/" {
 		return fmt.Errorf("origin %q must not include a path", origin)
 	}
 	if u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("origin %q must not include query or fragment", origin)
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return fmt.Errorf("origin %q has invalid empty port", origin)
 	}
 	if port := u.Port(); port != "" {
 		if _, err := strconv.Atoi(port); err != nil {
