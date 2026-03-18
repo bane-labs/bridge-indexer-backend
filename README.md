@@ -111,6 +111,8 @@ cp .env.example .env
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SERVER_PORT` | `8080` | HTTP server port |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated browser origins allowed for CORS |
+| `CORS_ALLOW_CREDENTIALS` | `false` | Enables credentialed CORS requests; requires non-wildcard allowed origins |
 | `DB_PATH` | `./data/badger` | BadgerDB data directory |
 | `STUCK_THRESHOLD_MINUTES` | `5` | Stuck operation detection threshold (minutes) |
 | `DISCORD_WEBHOOK_URL` | | Discord webhook URL for alerts |

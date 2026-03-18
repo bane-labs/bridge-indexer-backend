@@ -16,6 +16,8 @@ import (
 type rawConfig struct {
 	N3RPCEndpoints        string `mapstructure:"NEO_N3_RPC_ENDPOINTS"`
 	NeoXRPCEndpoints      string `mapstructure:"NEOX_RPC_ENDPOINTS"`
+	CORSAllowedOrigins    string `mapstructure:"CORS_ALLOWED_ORIGINS"`
+	CORSAllowCredentials  bool   `mapstructure:"CORS_ALLOW_CREDENTIALS"`
 	StuckThresholdMinutes int    `mapstructure:"STUCK_THRESHOLD_MINUTES"`
 	DiscordWebhookURL     string `mapstructure:"DISCORD_WEBHOOK_URL"`
 	SMTPHost              string `mapstructure:"SMTP_HOST"`
@@ -39,28 +41,30 @@ type rawConfig struct {
 }
 
 type Config struct {
-	N3RPCEndpoints      []string
-	NeoXRPCEndpoints    []string
-	StuckThreshold      time.Duration
-	DiscordWebhookURL   string
-	SMTPHost            string
-	SMTPPort            int
-	SMTPUser            string
-	SMTPPass            string
-	SMTPFrom            string
-	AlertRecipients     []string
-	ServerPort          string
-	DBPath              string
-	NeoXTokenBridge     string
-	NeoXMessageBridge   string
-	N3NeoXBridge        string
-	N3MessageBridge     string
-	N3SyncConcurrency   int
-	N3StartBlock        uint64
-	NeoXStartBlock      uint64
-	NeoXSyncConcurrency int
-	N3RPCCallInterval   time.Duration
-	NeoXRPCCallInterval time.Duration
+	N3RPCEndpoints       []string
+	NeoXRPCEndpoints     []string
+	CORSAllowedOrigins   []string
+	CORSAllowCredentials bool
+	StuckThreshold       time.Duration
+	DiscordWebhookURL    string
+	SMTPHost             string
+	SMTPPort             int
+	SMTPUser             string
+	SMTPPass             string
+	SMTPFrom             string
+	AlertRecipients      []string
+	ServerPort           string
+	DBPath               string
+	NeoXTokenBridge      string
+	NeoXMessageBridge    string
+	N3NeoXBridge         string
+	N3MessageBridge      string
+	N3SyncConcurrency    int
+	N3StartBlock         uint64
+	NeoXStartBlock       uint64
+	NeoXSyncConcurrency  int
+	N3RPCCallInterval    time.Duration
+	NeoXRPCCallInterval  time.Duration
 }
 
 // envKeys lists all environment variable names. Used by BindEnv so that
@@ -68,6 +72,8 @@ type Config struct {
 var envKeys = []string{
 	"NEO_N3_RPC_ENDPOINTS",
 	"NEOX_RPC_ENDPOINTS",
+	"CORS_ALLOWED_ORIGINS",
+	"CORS_ALLOW_CREDENTIALS",
 	"STUCK_THRESHOLD_MINUTES",
 	"DISCORD_WEBHOOK_URL",
 	"SMTP_HOST",
@@ -92,6 +98,8 @@ var envKeys = []string{
 
 func SetDefaults(v *viper.Viper) {
 	v.SetDefault("STUCK_THRESHOLD_MINUTES", 5)
+	v.SetDefault("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+	v.SetDefault("CORS_ALLOW_CREDENTIALS", false)
 	v.SetDefault("SMTP_PORT", 587)
 	v.SetDefault("SERVER_PORT", "8080")
 	v.SetDefault("DB_PATH", "./data/badger")
@@ -138,28 +146,30 @@ func Load(v *viper.Viper) (*Config, error) {
 	}
 
 	cfg := &Config{
-		N3RPCEndpoints:      parseCommaSeparated(raw.N3RPCEndpoints),
-		NeoXRPCEndpoints:    parseCommaSeparated(raw.NeoXRPCEndpoints),
-		StuckThreshold:      time.Duration(raw.StuckThresholdMinutes) * time.Minute,
-		DiscordWebhookURL:   raw.DiscordWebhookURL,
-		SMTPHost:            raw.SMTPHost,
-		SMTPPort:            raw.SMTPPort,
-		SMTPUser:            raw.SMTPUser,
-		SMTPPass:            raw.SMTPPass,
-		SMTPFrom:            raw.SMTPFrom,
-		AlertRecipients:     parseCommaSeparated(raw.AlertRecipients),
-		ServerPort:          raw.ServerPort,
-		DBPath:              raw.DBPath,
-		NeoXTokenBridge:     raw.NeoXTokenBridge,
-		NeoXMessageBridge:   raw.NeoXMessageBridge,
-		N3NeoXBridge:        raw.N3NeoXBridge,
-		N3MessageBridge:     raw.N3MessageBridge,
-		N3SyncConcurrency:   raw.N3SyncConcurrency,
-		N3StartBlock:        uint64(raw.N3StartBlock),
-		NeoXStartBlock:      uint64(raw.NeoXStartBlock),
-		NeoXSyncConcurrency: raw.NeoXSyncConcurrency,
-		N3RPCCallInterval:   clampDuration(raw.N3RPCCallIntervalMs),
-		NeoXRPCCallInterval: clampDuration(raw.NeoXRPCCallIntervalMs),
+		N3RPCEndpoints:       parseCommaSeparated(raw.N3RPCEndpoints),
+		NeoXRPCEndpoints:     parseCommaSeparated(raw.NeoXRPCEndpoints),
+		CORSAllowedOrigins:   parseCommaSeparated(raw.CORSAllowedOrigins),
+		CORSAllowCredentials: raw.CORSAllowCredentials,
+		StuckThreshold:       time.Duration(raw.StuckThresholdMinutes) * time.Minute,
+		DiscordWebhookURL:    raw.DiscordWebhookURL,
+		SMTPHost:             raw.SMTPHost,
+		SMTPPort:             raw.SMTPPort,
+		SMTPUser:             raw.SMTPUser,
+		SMTPPass:             raw.SMTPPass,
+		SMTPFrom:             raw.SMTPFrom,
+		AlertRecipients:      parseCommaSeparated(raw.AlertRecipients),
+		ServerPort:           raw.ServerPort,
+		DBPath:               raw.DBPath,
+		NeoXTokenBridge:      raw.NeoXTokenBridge,
+		NeoXMessageBridge:    raw.NeoXMessageBridge,
+		N3NeoXBridge:         raw.N3NeoXBridge,
+		N3MessageBridge:      raw.N3MessageBridge,
+		N3SyncConcurrency:    raw.N3SyncConcurrency,
+		N3StartBlock:         uint64(raw.N3StartBlock),
+		NeoXStartBlock:       uint64(raw.NeoXStartBlock),
+		NeoXSyncConcurrency:  raw.NeoXSyncConcurrency,
+		N3RPCCallInterval:    clampDuration(raw.N3RPCCallIntervalMs),
+		NeoXRPCCallInterval:  clampDuration(raw.NeoXRPCCallIntervalMs),
 	}
 
 	return cfg, nil
@@ -186,10 +196,47 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if len(c.CORSAllowedOrigins) == 0 {
+		errs = append(errs, "CORS_ALLOWED_ORIGINS cannot be empty")
+	}
+	for _, origin := range c.CORSAllowedOrigins {
+		if origin == "*" {
+			if c.CORSAllowCredentials {
+				errs = append(errs, "CORS_ALLOWED_ORIGINS cannot include * when CORS_ALLOW_CREDENTIALS=true")
+			}
+			continue
+		}
+		if err := validateOriginURL(origin); err != nil {
+			errs = append(errs, fmt.Sprintf("CORS_ALLOWED_ORIGINS: %v", err))
+		}
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("configuration validation failed: %s", strings.Join(errs, "; "))
 	}
 
+	return nil
+}
+
+func validateOriginURL(origin string) error {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return fmt.Errorf("origin %q is not valid: %w", origin, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("origin %q must include scheme and host", origin)
+	}
+	switch u.Scheme {
+	case "http", "https":
+	default:
+		return fmt.Errorf("origin %q has unsupported scheme %q", origin, u.Scheme)
+	}
+	if u.Path != "" && u.Path != "/" {
+		return fmt.Errorf("origin %q must not include a path", origin)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("origin %q must not include query or fragment", origin)
+	}
 	return nil
 }
 
