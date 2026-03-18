@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -231,11 +232,19 @@ func validateOriginURL(origin string) error {
 	default:
 		return fmt.Errorf("origin %q has unsupported scheme %q", origin, u.Scheme)
 	}
-	if u.Path != "" && u.Path != "/" {
+	if u.User != nil {
+		return fmt.Errorf("origin %q must not include user info", origin)
+	}
+	if u.Path != "" {
 		return fmt.Errorf("origin %q must not include a path", origin)
 	}
 	if u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("origin %q must not include query or fragment", origin)
+	}
+	if port := u.Port(); port != "" {
+		if _, err := strconv.Atoi(port); err != nil {
+			return fmt.Errorf("origin %q has invalid port %q", origin, port)
+		}
 	}
 	return nil
 }
