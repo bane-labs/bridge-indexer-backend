@@ -235,7 +235,7 @@ func validateOriginURL(origin string) error {
 	if u.User != nil {
 		return fmt.Errorf("origin %q must not include user info", origin)
 	}
-	if u.Path != "" && u.Path != "/" {
+	if u.Path != "" {
 		return fmt.Errorf("origin %q must not include a path", origin)
 	}
 	if u.RawQuery != "" || u.Fragment != "" {

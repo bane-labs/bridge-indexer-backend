@@ -394,9 +394,9 @@ func TestValidate_CORSOriginFormats(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "valid with trailing slash",
+			name:    "invalid with trailing slash",
 			origin:  "https://app.example.com/",
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name:    "invalid with path",
