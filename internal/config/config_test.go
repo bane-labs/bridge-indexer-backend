@@ -44,8 +44,8 @@ func TestLoadConfig_RequiredOnly(t *testing.T) {
 	if len(cfg.NeoXRPCEndpoints) != 1 || cfg.NeoXRPCEndpoints[0] != "https://mainnet-1.rpc.banelabs.org" {
 		t.Errorf("NeoXRPCEndpoints = %v, want [https://mainnet-1.rpc.banelabs.org]", cfg.NeoXRPCEndpoints)
 	}
-	if len(cfg.CORSAllowedOrigins) != 2 {
-		t.Errorf("CORSAllowedOrigins length = %d, want 2", len(cfg.CORSAllowedOrigins))
+	if len(cfg.CORSAllowedOrigins) != 0 {
+		t.Errorf("CORSAllowedOrigins length = %d, want 0", len(cfg.CORSAllowedOrigins))
 	}
 	if cfg.CORSAllowCredentials {
 		t.Error("CORSAllowCredentials = true, want false by default")
@@ -180,14 +180,8 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if cfg.StuckThreshold != 5*time.Minute {
 		t.Errorf("StuckThreshold = %v, want 5m0s", cfg.StuckThreshold)
 	}
-	if len(cfg.CORSAllowedOrigins) != 2 {
-		t.Errorf("CORSAllowedOrigins length = %d, want 2", len(cfg.CORSAllowedOrigins))
-	}
-	if cfg.CORSAllowedOrigins[0] != "http://localhost:3000" {
-		t.Errorf("CORSAllowedOrigins[0] = %q, want http://localhost:3000", cfg.CORSAllowedOrigins[0])
-	}
-	if cfg.CORSAllowedOrigins[1] != "http://127.0.0.1:3000" {
-		t.Errorf("CORSAllowedOrigins[1] = %q, want http://127.0.0.1:3000", cfg.CORSAllowedOrigins[1])
+	if len(cfg.CORSAllowedOrigins) != 0 {
+		t.Errorf("CORSAllowedOrigins length = %d, want 0", len(cfg.CORSAllowedOrigins))
 	}
 	if cfg.CORSAllowCredentials {
 		t.Error("CORSAllowCredentials = true, want false by default")
@@ -458,6 +452,34 @@ func TestValidate_CORSOriginFormats(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidate_EmptyOriginsCredentialsFalse(t *testing.T) {
+	cfg := &Config{
+		N3RPCEndpoints:       []string{"http://seed1.neo.org:10332"},
+		NeoXRPCEndpoints:     []string{"https://rpc.example.com"},
+		CORSAllowedOrigins:   nil,
+		CORSAllowCredentials: false,
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() should succeed with empty origins and credentials=false, got: %v", err)
+	}
+}
+
+func TestValidate_EmptyOriginsCredentialsTrue(t *testing.T) {
+	cfg := &Config{
+		N3RPCEndpoints:       []string{"http://seed1.neo.org:10332"},
+		NeoXRPCEndpoints:     []string{"https://rpc.example.com"},
+		CORSAllowedOrigins:   nil,
+		CORSAllowCredentials: true,
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() should fail with empty origins and credentials=true")
+	}
+	if !strings.Contains(err.Error(), "CORS_ALLOW_CREDENTIALS") {
+		t.Errorf("error %q should mention CORS_ALLOW_CREDENTIALS", err.Error())
 	}
 }
 

@@ -99,7 +99,7 @@ var envKeys = []string{
 
 func SetDefaults(v *viper.Viper) {
 	v.SetDefault("STUCK_THRESHOLD_MINUTES", 5)
-	v.SetDefault("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+	v.SetDefault("CORS_ALLOWED_ORIGINS", "")
 	v.SetDefault("CORS_ALLOW_CREDENTIALS", false)
 	v.SetDefault("SMTP_PORT", 587)
 	v.SetDefault("SERVER_PORT", "8080")
@@ -197,8 +197,8 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if len(c.CORSAllowedOrigins) == 0 {
-		errs = append(errs, "CORS_ALLOWED_ORIGINS cannot be empty")
+	if len(c.CORSAllowedOrigins) == 0 && c.CORSAllowCredentials {
+		errs = append(errs, "CORS_ALLOW_CREDENTIALS=true requires at least one CORS_ALLOWED_ORIGINS entry")
 	}
 	for _, origin := range c.CORSAllowedOrigins {
 		if origin == "*" {
