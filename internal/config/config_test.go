@@ -428,6 +428,16 @@ func TestValidate_CORSOriginFormats(t *testing.T) {
 			origin:  "https://app.example.com:abc",
 			wantErr: true,
 		},
+		{
+			name:    "invalid with port zero",
+			origin:  "https://app.example.com:0",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with port out of range",
+			origin:  "https://app.example.com:99999",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

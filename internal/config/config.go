@@ -245,7 +245,8 @@ func validateOriginURL(origin string) error {
 		return fmt.Errorf("origin %q has invalid empty port", origin)
 	}
 	if port := u.Port(); port != "" {
-		if _, err := strconv.Atoi(port); err != nil {
+		portNum, err := strconv.Atoi(port)
+		if err != nil || portNum < 1 || portNum > 65535 {
 			return fmt.Errorf("origin %q has invalid port %q", origin, port)
 		}
 	}
