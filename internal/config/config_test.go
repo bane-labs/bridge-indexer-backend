@@ -44,6 +44,12 @@ func TestLoadConfig_RequiredOnly(t *testing.T) {
 	if len(cfg.NeoXRPCEndpoints) != 1 || cfg.NeoXRPCEndpoints[0] != "https://mainnet-1.rpc.banelabs.org" {
 		t.Errorf("NeoXRPCEndpoints = %v, want [https://mainnet-1.rpc.banelabs.org]", cfg.NeoXRPCEndpoints)
 	}
+	if len(cfg.CORSAllowedOrigins) != 0 {
+		t.Errorf("CORSAllowedOrigins length = %d, want 0", len(cfg.CORSAllowedOrigins))
+	}
+	if cfg.CORSAllowCredentials {
+		t.Error("CORSAllowCredentials = true, want false by default")
+	}
 }
 
 func TestLoadConfig_AllFields(t *testing.T) {
@@ -51,6 +57,8 @@ func TestLoadConfig_AllFields(t *testing.T) {
 	t.Setenv("NEO_N3_RPC_ENDPOINTS", "http://seed1:10332,http://seed2:10332")
 	t.Setenv("NEOX_RPC_ENDPOINTS", "https://rpc1.example.com,https://rpc2.example.com")
 	t.Setenv("STUCK_THRESHOLD_MINUTES", "10")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com,https://admin.example.com")
+	t.Setenv("CORS_ALLOW_CREDENTIALS", "true")
 	t.Setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/123/abc")
 	t.Setenv("SMTP_HOST", "smtp.example.com")
 	t.Setenv("SMTP_PORT", "465")
@@ -82,6 +90,12 @@ func TestLoadConfig_AllFields(t *testing.T) {
 	}
 	if cfg.StuckThreshold != 10*time.Minute {
 		t.Errorf("StuckThreshold = %v, want 10m", cfg.StuckThreshold)
+	}
+	if len(cfg.CORSAllowedOrigins) != 2 {
+		t.Errorf("CORSAllowedOrigins length = %d, want 2", len(cfg.CORSAllowedOrigins))
+	}
+	if !cfg.CORSAllowCredentials {
+		t.Error("CORSAllowCredentials = false, want true")
 	}
 	if cfg.DiscordWebhookURL != "https://discord.com/api/webhooks/123/abc" {
 		t.Errorf("DiscordWebhookURL = %q, want webhook URL", cfg.DiscordWebhookURL)
@@ -165,6 +179,12 @@ func TestLoadConfig_Defaults(t *testing.T) {
 
 	if cfg.StuckThreshold != 5*time.Minute {
 		t.Errorf("StuckThreshold = %v, want 5m0s", cfg.StuckThreshold)
+	}
+	if len(cfg.CORSAllowedOrigins) != 0 {
+		t.Errorf("CORSAllowedOrigins length = %d, want 0", len(cfg.CORSAllowedOrigins))
+	}
+	if cfg.CORSAllowCredentials {
+		t.Error("CORSAllowCredentials = true, want false by default")
 	}
 	if cfg.SMTPPort != 587 {
 		t.Errorf("SMTPPort = %d, want 587", cfg.SMTPPort)
@@ -298,8 +318,9 @@ func TestValidate_InvalidEndpointURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				N3RPCEndpoints:   []string{tt.n3},
-				NeoXRPCEndpoints: []string{tt.neox},
+				N3RPCEndpoints:     []string{tt.n3},
+				NeoXRPCEndpoints:   []string{tt.neox},
+				CORSAllowedOrigins: []string{"http://localhost:3000"},
 			}
 			err := cfg.Validate()
 			if err == nil {
@@ -317,13 +338,158 @@ func TestValidate_ValidEndpointSchemes(t *testing.T) {
 	for _, scheme := range schemes {
 		t.Run(scheme, func(t *testing.T) {
 			cfg := &Config{
-				N3RPCEndpoints:   []string{scheme + "://seed1.neo.org:10332"},
-				NeoXRPCEndpoints: []string{scheme + "://rpc.example.com"},
+				N3RPCEndpoints:     []string{scheme + "://seed1.neo.org:10332"},
+				NeoXRPCEndpoints:   []string{scheme + "://rpc.example.com"},
+				CORSAllowedOrigins: []string{"http://localhost:3000"},
 			}
 			if err := cfg.Validate(); err != nil {
 				t.Errorf("Validate() should accept %s scheme, got: %v", scheme, err)
 			}
 		})
+	}
+}
+
+func TestValidate_CORSWildcardWithCredentials(t *testing.T) {
+	cfg := &Config{
+		N3RPCEndpoints:       []string{"http://seed1.neo.org:10332"},
+		NeoXRPCEndpoints:     []string{"https://rpc.example.com"},
+		CORSAllowedOrigins:   []string{"*"},
+		CORSAllowCredentials: true,
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() should fail when CORS_ALLOW_CREDENTIALS=true and origin is wildcard")
+	}
+	if !strings.Contains(err.Error(), "CORS_ALLOWED_ORIGINS") {
+		t.Errorf("error %q should mention CORS_ALLOWED_ORIGINS", err.Error())
+	}
+}
+
+func TestValidate_InvalidCORSOrigin(t *testing.T) {
+	cfg := &Config{
+		N3RPCEndpoints:     []string{"http://seed1.neo.org:10332"},
+		NeoXRPCEndpoints:   []string{"https://rpc.example.com"},
+		CORSAllowedOrigins: []string{"https://app.example.com/path"},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() should fail for CORS origin with path")
+	}
+	if !strings.Contains(err.Error(), "CORS_ALLOWED_ORIGINS") {
+		t.Errorf("error %q should mention CORS_ALLOWED_ORIGINS", err.Error())
+	}
+}
+
+func TestValidate_CORSOriginFormats(t *testing.T) {
+	tests := []struct {
+		name    string
+		origin  string
+		wantErr bool
+	}{
+		{
+			name:    "valid without trailing slash",
+			origin:  "https://app.example.com",
+			wantErr: false,
+		},
+		{
+			name:    "invalid with trailing slash",
+			origin:  "https://app.example.com/",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with path",
+			origin:  "https://app.example.com/path",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with query",
+			origin:  "https://app.example.com?query=1",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with fragment",
+			origin:  "https://app.example.com#fragment",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with userinfo",
+			origin:  "https://user@app.example.com",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with empty port",
+			origin:  "https://app.example.com:",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with non-numeric port",
+			origin:  "https://app.example.com:abc",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with port zero",
+			origin:  "https://app.example.com:0",
+			wantErr: true,
+		},
+		{
+			name:    "invalid with port out of range",
+			origin:  "https://app.example.com:99999",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				N3RPCEndpoints:     []string{"http://seed1.neo.org:10332"},
+				NeoXRPCEndpoints:   []string{"https://rpc.example.com"},
+				CORSAllowedOrigins: []string{tt.origin},
+			}
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Validate() should fail for CORS origin %q", tt.origin)
+				}
+				if !strings.Contains(err.Error(), "CORS_ALLOWED_ORIGINS") {
+					t.Errorf("error %q should mention CORS_ALLOWED_ORIGINS", err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Validate() should succeed for CORS origin %q, got error: %v", tt.origin, err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidate_EmptyOriginsCredentialsFalse(t *testing.T) {
+	cfg := &Config{
+		N3RPCEndpoints:       []string{"http://seed1.neo.org:10332"},
+		NeoXRPCEndpoints:     []string{"https://rpc.example.com"},
+		CORSAllowedOrigins:   nil,
+		CORSAllowCredentials: false,
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() should succeed with empty origins and credentials=false, got: %v", err)
+	}
+}
+
+func TestValidate_EmptyOriginsCredentialsTrue(t *testing.T) {
+	cfg := &Config{
+		N3RPCEndpoints:       []string{"http://seed1.neo.org:10332"},
+		NeoXRPCEndpoints:     []string{"https://rpc.example.com"},
+		CORSAllowedOrigins:   nil,
+		CORSAllowCredentials: true,
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() should fail with empty origins and credentials=true")
+	}
+	if !strings.Contains(err.Error(), "CORS_ALLOW_CREDENTIALS") {
+		t.Errorf("error %q should mention CORS_ALLOW_CREDENTIALS", err.Error())
 	}
 }
 

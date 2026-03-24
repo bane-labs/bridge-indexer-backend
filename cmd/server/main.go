@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	echoSwagger "github.com/swaggo/echo-swagger"
@@ -183,6 +184,19 @@ func run(cmd *cobra.Command, args []string) error {
 
 	e := echo.New()
 	e.HideBanner = true
+	if len(cfg.CORSAllowedOrigins) > 0 {
+		e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+			AllowOrigins:     cfg.CORSAllowedOrigins,
+			AllowMethods:     []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
+			AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, echo.HeaderXRequestedWith, "X-Request-Id"},
+			ExposeHeaders:    []string{"X-Request-Id"},
+			AllowCredentials: cfg.CORSAllowCredentials,
+			MaxAge:           int((12 * time.Hour).Seconds()),
+		}))
+		logger.Info("CORS enabled", "origins", len(cfg.CORSAllowedOrigins), "credentials", cfg.CORSAllowCredentials)
+	} else {
+		logger.Info("CORS disabled, no allowed origins configured")
+	}
 	handler := api.NewHandler(store, opStore, healthAgg)
 	api.RegisterRoutes(e, handler)
 	e.GET("/swagger/*", echoSwagger.WrapHandler)
