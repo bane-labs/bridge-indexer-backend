@@ -22,6 +22,7 @@ type Client struct {
 	counter      atomic.Uint64
 	logger       *slog.Logger
 	callInterval time.Duration
+	lastCallNs   atomic.Int64
 }
 
 // NewClient creates a Client with a pool of poolSize RPC connections,
@@ -54,7 +55,7 @@ func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *sl
 			defer wg.Done()
 			ep := endpoints[i%len(endpoints)]
 			rpc, err := rpcclient.New(ctx, ep, rpcclient.Options{
-				RequestTimeout: 30 * time.Second,
+				RequestTimeout: 45 * time.Second,
 			})
 			if err != nil {
 				logger.Warn("Failed to create Neo N3 RPC client", "endpoint", ep, "poolIdx", i, "error", err)
@@ -95,6 +96,9 @@ func retry[T any](c *Client, ctx context.Context, op func(rpc *rpcclient.Client)
 	var zero T
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if err := c.waitForPacing(ctx); err != nil {
+			return zero, err
+		}
 		rpc := c.pick()
 		val, err := op(rpc)
 		if err == nil {
@@ -106,10 +110,39 @@ func retry[T any](c *Client, ctx context.Context, op func(rpc *rpcclient.Client)
 			backoff := time.Duration(1<<attempt) * 500 * time.Millisecond // 500ms, 1s, 2s, 4s, 8s
 			c.logger.Warn("Neo N3 RPC call failed, retrying",
 				"attempt", attempt+1, "backoff", backoff, "error", err)
-			time.Sleep(backoff)
+			select {
+			case <-ctx.Done():
+				return zero, ctx.Err()
+			case <-time.After(backoff):
+			}
 		}
 	}
 	return zero, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
+}
+
+func (c *Client) waitForPacing(ctx context.Context) error {
+	if c.callInterval <= 0 {
+		return nil
+	}
+	now := time.Now()
+	lastNs := c.lastCallNs.Load()
+	if lastNs == 0 {
+		c.lastCallNs.CompareAndSwap(0, now.UnixNano())
+		return nil
+	}
+	last := time.Unix(0, lastNs)
+	nextAllowed := last.Add(c.callInterval)
+	if now.Before(nextAllowed) {
+		wait := time.Until(nextAllowed)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+		now = time.Now()
+	}
+	c.lastCallNs.Store(now.UnixNano())
+	return nil
 }
 
 func (c *Client) GetBlockCount(ctx context.Context) (uint32, error) {

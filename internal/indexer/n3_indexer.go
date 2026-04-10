@@ -153,90 +153,29 @@ func (idx *N3Indexer) runSerial(ctx context.Context, startHeight uint32) error {
 }
 
 func (idx *N3Indexer) processBlock(ctx context.Context, height uint32) error {
-	blk, err := idx.client.GetBlockByIndex(ctx, height)
+	state, ops, err := idx.processBlockWithResult(ctx, height)
 	if err != nil {
-		return fmt.Errorf("get block %d: %w", height, err)
+		return err
 	}
-
-	var allOps []*types.BridgeOperation
-
-	for _, tx := range blk.Transactions {
-		// Pre-filter: skip transactions whose Script doesn't contain any watched contract hash
-		if !idx.txMayInvokeContracts(tx.Script, idx.contracts) {
-			continue
-		}
-
-		txHash := tx.Hash()
-
-		appLog, err := idx.client.GetApplicationLog(ctx, txHash)
-		if err != nil {
-			idx.logger.Warn("Failed to get app log", "tx", txHash.StringLE(), "error", err)
-			continue
-		}
-
-		for _, exec := range appLog.Executions {
-			if exec.VMState != vmstate.Halt {
-				continue
-			}
-
-			for _, event := range exec.Events {
-				if !idx.isWatchedContract(event.ScriptHash) {
-					continue
-				}
-
-				if idx.processor == nil {
-					continue
-				}
-
-				blockTime := time.UnixMilli(int64(blk.Timestamp))
-				op, err := idx.processor.ProcessEvent(event, height, txHash.StringLE(), blockTime)
-				if err != nil {
-					idx.logger.Warn("Failed to process event",
-						"event", event.Name,
-						"tx", txHash.StringLE(),
-						"error", err,
-					)
-					continue
-				}
-				if op != nil {
-					allOps = append(allOps, op)
-				}
-			}
-		}
-	}
-
-	newState := &types.IndexerState{
-		Chain:           chainN3,
-		LastBlockHeight: uint64(height),
-		LastBlockHash:   blk.Hash().StringLE(),
-		IsSyncing:       true,
-		UpdatedAt:       time.Now(),
-	}
-
-	if len(allOps) > 0 {
-		extraOps, bsErr := idx.buildBridgeStateWriteOps(allOps)
+	if len(ops) > 0 {
+		extraOps, bsErr := idx.buildBridgeStateWriteOps(ops)
 		if bsErr != nil {
 			return fmt.Errorf("build bridge state write ops: %w", bsErr)
 		}
 		if len(extraOps) > 0 {
-			if err := idx.store.SaveIndexerStateWithOperationsAndExtra(newState, allOps, extraOps); err != nil {
+			if err := idx.store.SaveIndexerStateWithOperationsAndExtra(state, ops, extraOps); err != nil {
 				return fmt.Errorf("save state with ops: %w", err)
 			}
 		} else {
-			if err := idx.store.SaveIndexerStateWithOperations(newState, allOps); err != nil {
+			if err := idx.store.SaveIndexerStateWithOperations(state, ops); err != nil {
 				return fmt.Errorf("save state with ops: %w", err)
 			}
 		}
 	} else {
-		if err := idx.store.SaveIndexerState(newState); err != nil {
+		if err := idx.store.SaveIndexerState(state); err != nil {
 			return fmt.Errorf("save state: %w", err)
 		}
 	}
-
-	if height%1000 == 0 {
-		idx.logger.Info("N3 indexer progress", "height", height)
-	}
-
 	return nil
 }
 

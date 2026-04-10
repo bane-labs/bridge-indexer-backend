@@ -108,9 +108,9 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("NEOX_MESSAGE_BRIDGE", "0x1212000000000000000000000000000000000009")
 	v.SetDefault("N3_NEOX_BRIDGE", "0xbb19cfc864b73159277e1fd39694b3fd5fc613d2")
 	v.SetDefault("N3_MESSAGE_BRIDGE", "0xde9cc59df7484ae2f2d2c1ce7a66dccbd5c8bd11")
-	v.SetDefault("N3_SYNC_CONCURRENCY", 200)
+	v.SetDefault("N3_SYNC_CONCURRENCY", 50)
 	v.SetDefault("NEOX_SYNC_CONCURRENCY", 20)
-	v.SetDefault("N3_RPC_CALL_INTERVAL_MS", 100)
+	v.SetDefault("N3_RPC_CALL_INTERVAL_MS", 250)
 	v.SetDefault("NEOX_RPC_CALL_INTERVAL_MS", 100)
 }
 

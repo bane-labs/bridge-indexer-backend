@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
@@ -12,13 +13,33 @@ type HealthAggregator struct {
 	opStore *datastore.OperationStore
 	pause   *PauseDetector
 	logger  *slog.Logger
+
+	mu             sync.RWMutex
+	healthCache    []types.BridgeHealth
+	healthCachedAt time.Time
+	delaysCache    *types.DelayMetrics
+	delaysCachedAt time.Time
+	cacheTTL       time.Duration
 }
 
 func NewHealthAggregator(opStore *datastore.OperationStore, pause *PauseDetector, logger *slog.Logger) *HealthAggregator {
-	return &HealthAggregator{opStore: opStore, pause: pause, logger: logger}
+	return &HealthAggregator{
+		opStore:  opStore,
+		pause:    pause,
+		logger:   logger,
+		cacheTTL: 10 * time.Second,
+	}
 }
 
 func (h *HealthAggregator) ComputeHealth() ([]types.BridgeHealth, error) {
+	h.mu.RLock()
+	if len(h.healthCache) > 0 && time.Since(h.healthCachedAt) < h.cacheTTL {
+		cached := cloneBridgeHealths(h.healthCache)
+		h.mu.RUnlock()
+		return cached, nil
+	}
+	h.mu.RUnlock()
+
 	bridgeTypes := []types.BridgeType{types.BridgeTypeNative, types.BridgeTypeToken, types.BridgeTypeMessage}
 	var results []types.BridgeHealth
 
@@ -29,6 +50,12 @@ func (h *HealthAggregator) ComputeHealth() ([]types.BridgeHealth, error) {
 		}
 		results = append(results, bh)
 	}
+
+	h.mu.Lock()
+	h.healthCache = cloneBridgeHealths(results)
+	h.healthCachedAt = time.Now()
+	h.mu.Unlock()
+
 	return results, nil
 }
 
@@ -57,6 +84,14 @@ func (h *HealthAggregator) GetOverallHealth() (*types.OverallHealth, error) {
 }
 
 func (h *HealthAggregator) GetDelays() (*types.DelayMetrics, error) {
+	h.mu.RLock()
+	if h.delaysCache != nil && time.Since(h.delaysCachedAt) < h.cacheTTL {
+		cached := cloneDelayMetrics(h.delaysCache)
+		h.mu.RUnlock()
+		return cached, nil
+	}
+	h.mu.RUnlock()
+
 	metrics := &types.DelayMetrics{
 		Avg24h: make(map[types.BridgeType]float64),
 		Avg7d:  make(map[types.BridgeType]float64),
@@ -103,6 +138,11 @@ func (h *HealthAggregator) GetDelays() (*types.DelayMetrics, error) {
 		}
 	}
 
+	h.mu.Lock()
+	h.delaysCache = cloneDelayMetrics(metrics)
+	h.delaysCachedAt = time.Now()
+	h.mu.Unlock()
+
 	return metrics, nil
 }
 
@@ -112,18 +152,17 @@ func (h *HealthAggregator) computeBridgeHealth(bt types.BridgeType) (types.Bridg
 	stuck := types.StatusStuck
 	completed := types.StatusCompleted
 
-	pendingOps, pendingCount, err := h.opStore.ListOperations(datastore.OperationFilter{BridgeType: &btCopy, Status: &pending})
-	if err != nil {
-		return types.BridgeHealth{}, err
-	}
-	_ = pendingOps
-
-	_, stuckCount, err := h.opStore.ListOperations(datastore.OperationFilter{BridgeType: &btCopy, Status: &stuck})
+	pendingCount, err := h.opStore.CountOperations(datastore.OperationFilter{BridgeType: &btCopy, Status: &pending})
 	if err != nil {
 		return types.BridgeHealth{}, err
 	}
 
-	_, completedCount, err := h.opStore.ListOperations(datastore.OperationFilter{BridgeType: &btCopy, Status: &completed})
+	stuckCount, err := h.opStore.CountOperations(datastore.OperationFilter{BridgeType: &btCopy, Status: &stuck})
+	if err != nil {
+		return types.BridgeHealth{}, err
+	}
+
+	completedCount, err := h.opStore.CountOperations(datastore.OperationFilter{BridgeType: &btCopy, Status: &completed})
 	if err != nil {
 		return types.BridgeHealth{}, err
 	}
@@ -156,4 +195,27 @@ func (h *HealthAggregator) computeBridgeHealth(bt types.BridgeType) (types.Bridg
 		PendingOperations: pendingCount,
 		StuckOperations:   stuckCount,
 	}, nil
+}
+
+func cloneBridgeHealths(in []types.BridgeHealth) []types.BridgeHealth {
+	out := make([]types.BridgeHealth, len(in))
+	copy(out, in)
+	return out
+}
+
+func cloneDelayMetrics(in *types.DelayMetrics) *types.DelayMetrics {
+	if in == nil {
+		return nil
+	}
+	out := &types.DelayMetrics{
+		Avg24h: make(map[types.BridgeType]float64, len(in.Avg24h)),
+		Avg7d:  make(map[types.BridgeType]float64, len(in.Avg7d)),
+	}
+	for k, v := range in.Avg24h {
+		out.Avg24h[k] = v
+	}
+	for k, v := range in.Avg7d {
+		out.Avg7d[k] = v
+	}
+	return out
 }

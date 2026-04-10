@@ -563,8 +563,8 @@ func TestLoadConfig_RPCCallIntervalDefaults(t *testing.T) {
 		t.Fatalf("Load(newViper()) returned error: %v", err)
 	}
 
-	if cfg.N3RPCCallInterval != 100*time.Millisecond {
-		t.Errorf("N3RPCCallInterval = %v, want 100ms", cfg.N3RPCCallInterval)
+	if cfg.N3RPCCallInterval != 250*time.Millisecond {
+		t.Errorf("N3RPCCallInterval = %v, want 250ms", cfg.N3RPCCallInterval)
 	}
 	if cfg.NeoXRPCCallInterval != 100*time.Millisecond {
 		t.Errorf("NeoXRPCCallInterval = %v, want 100ms", cfg.NeoXRPCCallInterval)

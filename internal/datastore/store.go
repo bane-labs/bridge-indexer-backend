@@ -36,6 +36,20 @@ func NewStore(path string, logger *slog.Logger) (*Store, error) {
 	return &Store{db: db, logger: logger}, nil
 }
 
+// NewReadOnlyStore opens a BadgerDB database in read-only mode.
+// Useful for status/reporting commands that run alongside the main process.
+func NewReadOnlyStore(path string, logger *slog.Logger) (*Store, error) {
+	opts := badger.DefaultOptions(path)
+	opts.Logger = nil // suppress badger internal logging
+	opts.ReadOnly = true
+	opts.BypassLockGuard = true
+	db, err := badger.Open(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open badger db (read-only): %w", err)
+	}
+	return &Store{db: db, logger: logger}, nil
+}
+
 // newStoreWithDB creates a Store from an already-opened badger.DB (internal tests).
 func newStoreWithDB(db *badger.DB, logger *slog.Logger) *Store {
 	return &Store{db: db, logger: logger}

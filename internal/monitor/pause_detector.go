@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"log/slog"
+	"sync"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
@@ -19,6 +20,7 @@ type PauseState struct {
 type PauseDetector struct {
 	store  *datastore.Store
 	state  PauseState
+	mu     sync.RWMutex
 	logger *slog.Logger
 }
 
@@ -27,6 +29,9 @@ func NewPauseDetector(store *datastore.Store, logger *slog.Logger) *PauseDetecto
 }
 
 func (d *PauseDetector) UpdatePause(bridgeType types.BridgeType, paused bool, scope string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	switch scope {
 	case "all":
 		switch bridgeType {
@@ -75,10 +80,15 @@ func (d *PauseDetector) UpdatePause(bridgeType types.BridgeType, paused bool, sc
 }
 
 func (d *PauseDetector) GetPauseState() PauseState {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.state
 }
 
 func (d *PauseDetector) IsDepositsPaused(bt types.BridgeType) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
 	switch bt {
 	case types.BridgeTypeNative:
 		return d.state.NativeDepositsPaused
@@ -91,6 +101,9 @@ func (d *PauseDetector) IsDepositsPaused(bt types.BridgeType) bool {
 }
 
 func (d *PauseDetector) IsWithdrawalsPaused(bt types.BridgeType) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
 	switch bt {
 	case types.BridgeTypeNative:
 		return d.state.NativeWithdrawalsPaused
