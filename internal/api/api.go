@@ -58,7 +58,6 @@ func RegisterRoutes(e *echo.Echo, h *Handler) {
 // @Success      200  {object}  types.OverallHealth
 // @Failure      500  {object}  ErrorResponse
 // @Router       /health [get]
-
 func (h *Handler) GetHealth(c echo.Context) error {
 	overall, err := h.health.GetOverallHealth()
 	if err != nil {
@@ -75,7 +74,6 @@ func (h *Handler) GetHealth(c echo.Context) error {
 // @Success      200  {array}   types.BridgeHealth
 // @Failure      500  {object}  ErrorResponse
 // @Router       /health/bridges [get]
-
 func (h *Handler) GetHealthBridges(c echo.Context) error {
 	bridges, err := h.health.ComputeHealth()
 	if err != nil {
@@ -92,7 +90,6 @@ func (h *Handler) GetHealthBridges(c echo.Context) error {
 // @Success      200  {object}  types.DelayMetrics
 // @Failure      500  {object}  ErrorResponse
 // @Router       /health/delays [get]
-
 func (h *Handler) GetHealthDelays(c echo.Context) error {
 	delays, err := h.health.GetDelays()
 	if err != nil {
@@ -108,7 +105,6 @@ func (h *Handler) GetHealthDelays(c echo.Context) error {
 // @Produce      json
 // @Success      200  {object}  IndexerStateResponse
 // @Router       /indexer/state [get]
-
 func (h *Handler) GetIndexerState(c echo.Context) error {
 	n3State, err := h.store.GetIndexerState("neo_n3")
 	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
@@ -139,7 +135,6 @@ func (h *Handler) GetIndexerState(c echo.Context) error {
 // @Success      200  {object}  OperationsResponse
 // @Failure      500  {object}  ErrorResponse
 // @Router       /operations [get]
-
 func (h *Handler) GetOperations(c echo.Context) error {
 	filter := datastore.OperationFilter{}
 
@@ -187,7 +182,6 @@ func (h *Handler) GetOperations(c echo.Context) error {
 // @Failure      400  {object}  ErrorResponse
 // @Failure      404  {object}  ErrorResponse
 // @Router       /operations/{nonce} [get]
-
 func (h *Handler) GetOperationByNonce(c echo.Context) error {
 	nonceStr := c.Param("nonce")
 	nonce, err := strconv.ParseUint(nonceStr, 10, 64)

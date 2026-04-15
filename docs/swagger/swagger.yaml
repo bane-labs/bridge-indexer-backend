@@ -1,5 +1,78 @@
 basePath: /
 definitions:
+  github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeHealth:
+    properties:
+      avg_completion_7d_seconds:
+        type: number
+      avg_completion_24h_seconds:
+        type: number
+      bridge_type:
+        $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeType'
+      deposits_paused:
+        type: boolean
+      pending_operations:
+        type: integer
+      status:
+        $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.HealthStatus'
+      stuck_operations:
+        type: integer
+      uptime_percentage:
+        type: number
+      withdrawals_paused:
+        type: boolean
+    type: object
+  github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeOperation:
+    properties:
+      amb_message_type:
+        description: |-
+          AMBMessageType is set for NeoX MessageSend events (executable | store_only | result).
+          Omitted when unknown or for non-message operations.
+        type: string
+      amount:
+        description: string to avoid big.Int JSON issues
+        type: string
+      bridge_type:
+        $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeType'
+      completion_timestamp:
+        description: destination event time
+        type: string
+      dest_block_height:
+        type: integer
+      dest_token_contract:
+        description: destination chain token; nil for native bridge
+        type: string
+      dest_tx_hash:
+        type: string
+      destination_chain:
+        description: '"neo_n3" or "neo_x"'
+        type: string
+      direction:
+        $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.Direction'
+      from_address:
+        type: string
+      nonce:
+        type: integer
+      root:
+        description: deposit/withdrawal root hash from event
+        type: string
+      source_block_height:
+        type: integer
+      source_chain:
+        description: '"neo_n3" or "neo_x"'
+        type: string
+      source_tx_hash:
+        type: string
+      status:
+        $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.OperationStatus'
+      timestamp:
+        description: source event time
+        type: string
+      to_address:
+        type: string
+      token_contract:
+        description: source chain token; nil for native bridge
+        type: string
+    type: object
   github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeType:
     enum:
     - native
@@ -10,6 +83,33 @@ definitions:
     - BridgeTypeNative
     - BridgeTypeToken
     - BridgeTypeMessage
+  github_com_bane-labs_bridge-indexer-backend_internal_types.DelayMetrics:
+    properties:
+      avg_7d_seconds:
+        additionalProperties:
+          format: float64
+          type: number
+        type: object
+      avg_24h_seconds:
+        additionalProperties:
+          format: float64
+          type: number
+        type: object
+    type: object
+  github_com_bane-labs_bridge-indexer-backend_internal_types.Direction:
+    enum:
+    - deposit
+    - withdrawal
+    type: string
+    x-enum-comments:
+      DirectionDeposit: N3 → NeoX
+      DirectionWithdrawal: NeoX → N3
+    x-enum-descriptions:
+    - N3 → NeoX
+    - NeoX → N3
+    x-enum-varnames:
+    - DirectionDeposit
+    - DirectionWithdrawal
   github_com_bane-labs_bridge-indexer-backend_internal_types.DirectionalInstanceSync:
     properties:
       bridge_type:
@@ -65,10 +165,72 @@ definitions:
     - DirectionalSyncStatusSourceAhead
     - DirectionalSyncStatusRootMismatch
     - DirectionalSyncStatusUnknown
+  github_com_bane-labs_bridge-indexer-backend_internal_types.HealthStatus:
+    enum:
+    - healthy
+    - degraded
+    - unhealthy
+    type: string
+    x-enum-varnames:
+    - HealthStatusHealthy
+    - HealthStatusDegraded
+    - HealthStatusUnhealthy
+  github_com_bane-labs_bridge-indexer-backend_internal_types.IndexerState:
+    properties:
+      chain:
+        description: '"neo_n3" or "neo_x"'
+        type: string
+      is_syncing:
+        type: boolean
+      last_block_hash:
+        description: for reorg detection
+        type: string
+      last_block_height:
+        type: integer
+      updated_at:
+        type: string
+    type: object
+  github_com_bane-labs_bridge-indexer-backend_internal_types.OperationStatus:
+    enum:
+    - pending
+    - completed
+    - stuck
+    type: string
+    x-enum-varnames:
+    - StatusPending
+    - StatusCompleted
+    - StatusStuck
+  github_com_bane-labs_bridge-indexer-backend_internal_types.OverallHealth:
+    properties:
+      bridges:
+        items:
+          $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeHealth'
+        type: array
+      status:
+        $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.HealthStatus'
+      updated_at:
+        type: string
+    type: object
   internal_api.ErrorResponse:
     properties:
       error:
         type: string
+    type: object
+  internal_api.IndexerStateResponse:
+    properties:
+      neo_n3:
+        $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.IndexerState'
+      neo_x:
+        $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.IndexerState'
+    type: object
+  internal_api.OperationsResponse:
+    properties:
+      operations:
+        items:
+          $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeOperation'
+        type: array
+      total:
+        type: integer
     type: object
 host: localhost:8080
 info:
@@ -78,6 +240,153 @@ info:
   title: Bridge Indexer API
   version: "1.0"
 paths:
+  /health:
+    get:
+      description: Returns overall health status including per-bridge health summaries
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.OverallHealth'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+      summary: Get overall bridge health
+      tags:
+      - health
+  /health/bridges:
+    get:
+      description: Returns health metrics for each bridge type (native, token, message)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeHealth'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+      summary: Get per-bridge health details
+      tags:
+      - health
+  /health/delays:
+    get:
+      description: Returns average completion times per bridge type for 24h and 7d
+        windows
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.DelayMetrics'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+      summary: Get average completion delays
+      tags:
+      - health
+  /indexer/state:
+    get:
+      description: Returns current indexed block height and sync status for each chain
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.IndexerStateResponse'
+      summary: Get indexer sync state
+      tags:
+      - indexer
+  /operations:
+    get:
+      description: Returns bridge operations with optional filtering by type, direction,
+        status, and pagination
+      parameters:
+      - description: Filter by bridge type
+        enum:
+        - native
+        - token
+        - message
+        in: query
+        name: bridge_type
+        type: string
+      - description: Filter by direction
+        enum:
+        - deposit
+        - withdrawal
+        in: query
+        name: direction
+        type: string
+      - description: Filter by status
+        enum:
+        - pending
+        - completed
+        - stuck
+        in: query
+        name: status
+        type: string
+      - description: 'Page size (default: 50)'
+        in: query
+        name: limit
+        type: integer
+      - description: 'Page offset (default: 0)'
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api.OperationsResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+      summary: List bridge operations
+      tags:
+      - operations
+  /operations/{nonce}:
+    get:
+      description: Returns all bridge operations matching the given nonce across all
+        bridge types and directions
+      parameters:
+      - description: Operation nonce
+        in: path
+        name: nonce
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeOperation'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api.ErrorResponse'
+      summary: Get operations by nonce
+      tags:
+      - operations
   /sync/instances:
     get:
       description: Returns directional sync status derived from persisted source/destination
