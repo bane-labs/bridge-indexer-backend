@@ -56,7 +56,7 @@ type operationsResponse struct {
 
 type operationsListResponse struct {
 	Operations []types.BridgeOperation `json:"operations"`
-	Total      int                       `json:"total"`
+	Total      int                     `json:"total"`
 }
 
 type syncSummary struct {

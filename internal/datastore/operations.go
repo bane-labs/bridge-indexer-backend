@@ -243,12 +243,12 @@ func (os *OperationStore) UpdateMessageDepositMirror(
 	}
 	instanceID := BuildInstanceID(string(types.BridgeTypeMessage), "neo_n3", "neo_x", nil, nil)
 	os.bridgeStateStore.ensureMetadata(instanceID, &types.BridgeOperation{
-		BridgeType:        types.BridgeTypeMessage,
-		Direction:         types.DirectionDeposit,
-		SourceChain:       "neo_n3",
-		DestinationChain:  "neo_x",
-		FromAddress:       "unknown",
-		ToAddress:         "",
+		BridgeType:       types.BridgeTypeMessage,
+		Direction:        types.DirectionDeposit,
+		SourceChain:      "neo_n3",
+		DestinationChain: "neo_x",
+		FromAddress:      "unknown",
+		ToAddress:        "",
 	})
 
 	rootPtr := &root
@@ -317,11 +317,11 @@ func (os *OperationStore) updateTokenDestBridgeStateFallback(
 	dstToken := dstTokenNorm
 	instanceID := BuildInstanceID(string(types.BridgeTypeToken), srcChain, dstChain, &srcToken, &dstToken)
 	os.bridgeStateStore.ensureMetadata(instanceID, &types.BridgeOperation{
-		BridgeType:       types.BridgeTypeToken,
-		SourceChain:      srcChain,
-		DestinationChain: dstChain,
-		TokenContract:    &srcToken,
-		DestTokenContract:&dstToken,
+		BridgeType:        types.BridgeTypeToken,
+		SourceChain:       srcChain,
+		DestinationChain:  dstChain,
+		TokenContract:     &srcToken,
+		DestTokenContract: &dstToken,
 	})
 
 	var current types.ChainState

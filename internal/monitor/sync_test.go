@@ -214,7 +214,7 @@ func assertSync(t *testing.T, got types.DirectionalInstanceSync, wantStatus type
 	}
 }
 
-func ptrInt64(v int64) *int64   { return &v }
+func ptrInt64(v int64) *int64    { return &v }
 func ptrUint64(v uint64) *uint64 { return &v }
 
 func assertNonceRoot(t *testing.T, got types.DirectionalInstanceSync, wantSrcNonce, wantDstNonce *uint64, wantSrcRoot, wantDstRoot *string) {

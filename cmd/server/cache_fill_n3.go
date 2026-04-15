@@ -231,4 +231,3 @@ func inferMissingN3AppLogs(cacheDir string) (uint32, uint32, []util.Uint256, err
 	}
 	return minBlock, maxBlock, missing, nil
 }
-
