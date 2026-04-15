@@ -27,7 +27,7 @@ func TestBuildInstanceID_TokenWithTokens(t *testing.T) {
 	src := "0xSrcToken"
 	dst := "0xDstToken"
 	id := BuildInstanceID("token", "neo_n3", "neo_x", &src, &dst)
-	expected := "token|neo_n3->neo_x|0xSrcToken|0xDstToken"
+	expected := "token|neo_n3->neo_x|srctoken|dsttoken"
 	if id != expected {
 		t.Fatalf("expected %q, got %q", expected, id)
 	}
@@ -246,6 +246,154 @@ func TestBridgeStateStore_TokenPairIsolation(t *testing.T) {
 	}
 }
 
+func TestBridgeStateStore_RebuildFromOperations(t *testing.T) {
+	s := newTestStore(t)
+	bs := NewBridgeStateStore(s)
+	opStore := NewOperationStore(s, bs)
+
+	now := time.Now()
+	completionTime := now.Add(time.Minute)
+	destBlock := uint64(500)
+	destTx := "0xdest"
+
+	// Native deposit: nonce 10 pending, nonce 5 completed.
+	if err := opStore.SaveOperation(&types.BridgeOperation{
+		BridgeType: types.BridgeTypeNative, Direction: types.DirectionDeposit, Nonce: 10,
+		SourceChain: "neo_n3", DestinationChain: "neo_x",
+		SourceBlockHeight: 100, SourceTxHash: "0xsrc10",
+		FromAddress: "a", ToAddress: "b", Timestamp: now, Status: types.StatusPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := opStore.SaveOperation(&types.BridgeOperation{
+		BridgeType: types.BridgeTypeNative, Direction: types.DirectionDeposit, Nonce: 5,
+		SourceChain: "neo_n3", DestinationChain: "neo_x",
+		SourceBlockHeight: 50, SourceTxHash: "0xsrc5",
+		DestBlockHeight: &destBlock, DestTxHash: &destTx, CompletionTimestamp: &completionTime,
+		FromAddress: "a", ToAddress: "b", Timestamp: now, Status: types.StatusCompleted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Message deposit: nonce 12 completed, both sides should appear.
+	msgDestBlock := uint64(600)
+	msgDestTx := "0xmsgdest"
+	if err := opStore.SaveOperation(&types.BridgeOperation{
+		BridgeType: types.BridgeTypeMessage, Direction: types.DirectionDeposit, Nonce: 12,
+		SourceChain: "neo_n3", DestinationChain: "neo_x",
+		SourceBlockHeight: 200, SourceTxHash: "0xmsgsrc12",
+		DestBlockHeight: &msgDestBlock, DestTxHash: &msgDestTx, CompletionTimestamp: &completionTime,
+		FromAddress: "a", ToAddress: "b", Timestamp: now, Status: types.StatusCompleted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Token deposit with same nonce as native (nonce 5), different bridge type — must not collide.
+	tokenSrc, tokenDst := "0xTokenSrc", "0xTokenDst"
+	tokenDestBlock := uint64(700)
+	tokenDestTx := "0xtokendest"
+	if err := opStore.SaveOperation(&types.BridgeOperation{
+		BridgeType: types.BridgeTypeToken, Direction: types.DirectionDeposit, Nonce: 5,
+		SourceChain: "neo_n3", DestinationChain: "neo_x",
+		SourceBlockHeight: 60, SourceTxHash: "0xtokensrc5",
+		TokenContract: &tokenSrc, DestTokenContract: &tokenDst,
+		DestBlockHeight: &tokenDestBlock, DestTxHash: &tokenDestTx, CompletionTimestamp: &completionTime,
+		FromAddress: "a", ToAddress: "b", Timestamp: now, Status: types.StatusCompleted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := bs.RebuildFromOperations(nil); err != nil {
+		t.Fatalf("RebuildFromOperations: %v", err)
+	}
+
+	// Native: src=10 (highest nonce), dst=5 (only completed)
+	nativeID := BuildInstanceID("native", "neo_n3", "neo_x", nil, nil)
+	nativeState, err := bs.GetBridgeState(nativeID)
+	if err != nil {
+		t.Fatalf("get native: %v", err)
+	}
+	if nativeState.SourceState == nil || nativeState.SourceState.Nonce != 10 {
+		t.Fatalf("native src nonce: got %v, want 10", nativeState.SourceState)
+	}
+	if nativeState.DestState == nil || nativeState.DestState.Nonce != 5 {
+		t.Fatalf("native dst nonce: got %v, want 5", nativeState.DestState)
+	}
+
+	// Message: src=12, dst=12
+	messageID := BuildInstanceID("message", "neo_n3", "neo_x", nil, nil)
+	messageState, err := bs.GetBridgeState(messageID)
+	if err != nil {
+		t.Fatalf("get message: %v", err)
+	}
+	if messageState.SourceState == nil || messageState.SourceState.Nonce != 12 {
+		t.Fatalf("message src nonce: got %v, want 12", messageState.SourceState)
+	}
+	if messageState.DestState == nil || messageState.DestState.Nonce != 12 {
+		t.Fatalf("message dst nonce: got %v, want 12", messageState.DestState)
+	}
+
+	// Token: src=5, dst=5 (isolated from native nonce 5)
+	tokenID := BuildInstanceID("token", "neo_n3", "neo_x", &tokenSrc, &tokenDst)
+	tokenState, err := bs.GetBridgeState(tokenID)
+	if err != nil {
+		t.Fatalf("get token: %v", err)
+	}
+	if tokenState.SourceState == nil || tokenState.SourceState.Nonce != 5 {
+		t.Fatalf("token src nonce: got %v, want 5", tokenState.SourceState)
+	}
+	if tokenState.DestState == nil || tokenState.DestState.Nonce != 5 {
+		t.Fatalf("token dst nonce: got %v, want 5", tokenState.DestState)
+	}
+}
+
+func TestBridgeStateStore_RebuildPreservesHigherExistingState(t *testing.T) {
+	s := newTestStore(t)
+	bs := NewBridgeStateStore(s)
+
+	// Pre-set a bridge state with src nonce=20 (higher than any operation).
+	root := "0xroot"
+	if err := bs.SaveBridgeState(&types.DirectionalBridgeState{
+		InstanceID: "native|neo_n3->neo_x",
+		BridgeType: types.BridgeTypeNative,
+		SrcChain:   "neo_n3",
+		DstChain:   "neo_x",
+		SourceState: &types.ChainState{
+			Nonce:       20,
+			Root:        &root,
+			BlockNumber: 999,
+			TxHash:      "0xhigh",
+			ObservedAt:  time.Now(),
+			IndexedAt:   time.Now(),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Operation with lower nonce.
+	opStore := NewOperationStore(s, bs)
+	if err := opStore.SaveOperation(&types.BridgeOperation{
+		BridgeType: types.BridgeTypeNative, Direction: types.DirectionDeposit, Nonce: 10,
+		SourceChain: "neo_n3", DestinationChain: "neo_x",
+		SourceBlockHeight: 100, SourceTxHash: "0xsrc10",
+		FromAddress: "a", ToAddress: "b", Timestamp: time.Now(), Status: types.StatusPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := bs.RebuildFromOperations(nil); err != nil {
+		t.Fatalf("RebuildFromOperations: %v", err)
+	}
+
+	state, err := bs.GetBridgeState("native|neo_n3->neo_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SourceState.Nonce != 20 {
+		t.Fatalf("expected nonce 20 to be preserved, got %d", state.SourceState.Nonce)
+	}
+}
+
 func TestBridgeStateStore_InstanceIDFromOperation(t *testing.T) {
 	// Native operation — no tokens.
 	op := &types.BridgeOperation{
@@ -271,7 +419,7 @@ func TestBridgeStateStore_InstanceIDFromOperation(t *testing.T) {
 		DestTokenContract: &dst,
 	}
 	id2 := InstanceIDFromOperation(op2)
-	expected := "token|neo_n3->neo_x|0xSrc|0xDst"
+	expected := "token|neo_n3->neo_x|src|dst"
 	if id2 != expected {
 		t.Fatalf("expected %q, got %q", expected, id2)
 	}

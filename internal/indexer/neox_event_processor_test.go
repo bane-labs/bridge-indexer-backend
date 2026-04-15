@@ -42,6 +42,30 @@ func padAddress(addr common.Address) common.Hash {
 	return common.BytesToHash(addr.Bytes())
 }
 
+// buildMessageSendLogData builds ABI-encoded non-indexed data for MessageSend
+// (bytes encodedMetadata, bytes message, bytes32 messageHash, bytes32 root).
+func buildMessageSendLogData(encodedMetadata []byte, message []byte, msgHash, root common.Hash) []byte {
+	metaLen := len(encodedMetadata)
+	msgLen := len(message)
+	off0 := 128
+	paddedMeta := ((metaLen + 31) / 32) * 32
+	off1 := 128 + 32 + paddedMeta
+	head := make([]byte, 128)
+	copy(head[0:32], common.LeftPadBytes(new(big.Int).SetInt64(int64(off0)).Bytes(), 32))
+	copy(head[32:64], common.LeftPadBytes(new(big.Int).SetInt64(int64(off1)).Bytes(), 32))
+	copy(head[64:96], msgHash.Bytes())
+	copy(head[96:128], root.Bytes())
+	var out []byte
+	out = append(out, head...)
+	out = append(out, common.LeftPadBytes(new(big.Int).SetInt64(int64(metaLen)).Bytes(), 32)...)
+	out = append(out, encodedMetadata...)
+	out = append(out, make([]byte, (32-metaLen%32)%32)...)
+	out = append(out, common.LeftPadBytes(new(big.Int).SetInt64(int64(msgLen)).Bytes(), 32)...)
+	out = append(out, message...)
+	out = append(out, make([]byte, (32-msgLen%32)%32)...)
+	return out
+}
+
 func TestNeoX_NativeWithdrawal(t *testing.T) {
 	proc, _ := newTestNeoXProcessor(t)
 
@@ -138,6 +162,9 @@ func TestNeoX_MessageSend(t *testing.T) {
 
 	sender := common.HexToAddress("0x1111111111111111111111111111111111111111")
 
+	meta := common.LeftPadBytes(new(big.Int).SetUint64(0).Bytes(), 32) // AMBTypes.MessageType.EXECUTABLE
+	data := buildMessageSendLogData(meta, nil, common.Hash{}, common.Hash{})
+
 	log := ethtypes.Log{
 		Address: common.HexToAddress(testMessageBridgeAddr),
 		Topics: []common.Hash{
@@ -145,7 +172,7 @@ func TestNeoX_MessageSend(t *testing.T) {
 			padUint256(33),
 			padAddress(sender),
 		},
-		Data:        make([]byte, 192),
+		Data:        data,
 		BlockNumber: 3000,
 		TxHash:      common.HexToHash("0xbabe"),
 	}
@@ -162,6 +189,38 @@ func TestNeoX_MessageSend(t *testing.T) {
 	}
 	if op.Nonce != 33 {
 		t.Fatalf("expected nonce 33, got %d", op.Nonce)
+	}
+	if op.AMBMessageType == nil || *op.AMBMessageType != types.AMBMessageTypeExecutable {
+		t.Fatalf("expected executable amb type, got %v", op.AMBMessageType)
+	}
+	if op.Status != types.StatusPending {
+		t.Fatalf("expected pending executable, got %s", op.Status)
+	}
+}
+
+func TestNeoX_MessageSend_storeOnlyCompleted(t *testing.T) {
+	proc, _ := newTestNeoXProcessor(t)
+	sender := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	meta := common.LeftPadBytes(new(big.Int).SetUint64(1).Bytes(), 32) // STORE_ONLY
+	data := buildMessageSendLogData(meta, nil, common.Hash{}, common.Hash{})
+	bt := time.Now()
+	log := ethtypes.Log{
+		Address: common.HexToAddress(testMessageBridgeAddr),
+		Topics:  []common.Hash{sigMessageSend, padUint256(7), padAddress(sender)},
+		Data:    data, BlockNumber: 4000, TxHash: common.HexToHash("0xbeef"),
+	}
+	op, _, err := proc.ProcessLog(log, bt)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if op == nil || op.Status != types.StatusCompleted {
+		t.Fatalf("expected completed store_only, got %+v", op)
+	}
+	if op.AMBMessageType == nil || *op.AMBMessageType != types.AMBMessageTypeStoreOnly {
+		t.Fatalf("amb type: %v", op.AMBMessageType)
+	}
+	if op.CompletionTimestamp == nil || !op.CompletionTimestamp.Equal(bt) {
+		t.Fatal("expected completion timestamp set at source")
 	}
 }
 
@@ -204,6 +263,52 @@ func TestNeoX_NativeDepositComplete(t *testing.T) {
 	}
 
 	got, err := opStore.GetOperation(types.BridgeTypeNative, types.DirectionDeposit, 20)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != types.StatusCompleted {
+		t.Fatalf("expected completed, got %s", got.Status)
+	}
+}
+
+func TestNeoX_NeoToEvmRootUpdateCompletesMessageDeposit(t *testing.T) {
+	proc, opStore := newTestNeoXProcessor(t)
+
+	pendingOp := &types.BridgeOperation{
+		BridgeType:        types.BridgeTypeMessage,
+		Direction:         types.DirectionDeposit,
+		Nonce:             12,
+		SourceChain:       chainN3,
+		DestinationChain:  chainNeoX,
+		SourceBlockHeight: 100,
+		SourceTxHash:      "0xsrc",
+		FromAddress:       "NFrom",
+		ToAddress:         "",
+		Timestamp:         time.Now().Add(-2 * time.Minute),
+		Status:            types.StatusPending,
+	}
+	if err := opStore.SaveOperation(pendingOp); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	root := common.HexToHash("0x2462a6e5b6fee1af70d96358e36eb868c5e181fa9ccd02440c179215b9feb55c")
+	log := ethtypes.Log{
+		Address: common.HexToAddress(testMessageBridgeAddr),
+		Topics: []common.Hash{
+			sigNeoToEvmRootUpdate,
+			padUint256(12),
+		},
+		Data:        root.Bytes(),
+		BlockNumber: 5001,
+		TxHash:      common.HexToHash("0xfeed"),
+	}
+
+	_, _, err := proc.ProcessLog(log, time.Now())
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	got, err := opStore.GetOperation(types.BridgeTypeMessage, types.DirectionDeposit, 12)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}

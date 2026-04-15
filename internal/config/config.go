@@ -15,57 +15,71 @@ import (
 // rawConfig is the intermediate struct for viper Unmarshal.
 // mapstructure tags define the env var name mapping — single source of truth.
 type rawConfig struct {
-	N3RPCEndpoints        string `mapstructure:"NEO_N3_RPC_ENDPOINTS"`
-	NeoXRPCEndpoints      string `mapstructure:"NEOX_RPC_ENDPOINTS"`
-	CORSAllowedOrigins    string `mapstructure:"CORS_ALLOWED_ORIGINS"`
-	CORSAllowCredentials  bool   `mapstructure:"CORS_ALLOW_CREDENTIALS"`
-	StuckThresholdMinutes int    `mapstructure:"STUCK_THRESHOLD_MINUTES"`
-	DiscordWebhookURL     string `mapstructure:"DISCORD_WEBHOOK_URL"`
-	SMTPHost              string `mapstructure:"SMTP_HOST"`
-	SMTPPort              int    `mapstructure:"SMTP_PORT"`
-	SMTPUser              string `mapstructure:"SMTP_USER"`
-	SMTPPass              string `mapstructure:"SMTP_PASS"`
-	SMTPFrom              string `mapstructure:"SMTP_FROM"`
-	AlertRecipients       string `mapstructure:"ALERT_RECIPIENTS"`
-	ServerPort            string `mapstructure:"SERVER_PORT"`
-	DBPath                string `mapstructure:"DB_PATH"`
-	NeoXTokenBridge       string `mapstructure:"NEOX_TOKEN_BRIDGE"`
-	NeoXMessageBridge     string `mapstructure:"NEOX_MESSAGE_BRIDGE"`
-	N3NeoXBridge          string `mapstructure:"N3_NEOX_BRIDGE"`
-	N3MessageBridge       string `mapstructure:"N3_MESSAGE_BRIDGE"`
-	N3SyncConcurrency     int    `mapstructure:"N3_SYNC_CONCURRENCY"`
-	N3StartBlock          int    `mapstructure:"N3_START_BLOCK"`
-	NeoXStartBlock        int    `mapstructure:"NEOX_START_BLOCK"`
-	NeoXSyncConcurrency   int    `mapstructure:"NEOX_SYNC_CONCURRENCY"`
-	N3RPCCallIntervalMs   int    `mapstructure:"N3_RPC_CALL_INTERVAL_MS"`
-	NeoXRPCCallIntervalMs int    `mapstructure:"NEOX_RPC_CALL_INTERVAL_MS"`
+	N3RPCEndpoints               string `mapstructure:"NEO_N3_RPC_ENDPOINTS"`
+	NeoXRPCEndpoints             string `mapstructure:"NEOX_RPC_ENDPOINTS"`
+	CORSAllowedOrigins           string `mapstructure:"CORS_ALLOWED_ORIGINS"`
+	CORSAllowCredentials         bool   `mapstructure:"CORS_ALLOW_CREDENTIALS"`
+	StuckThresholdMinutes        int    `mapstructure:"STUCK_THRESHOLD_MINUTES"`
+	StuckThresholdMessageMinutes int    `mapstructure:"STUCK_THRESHOLD_MESSAGE_MINUTES"`
+	StuckThresholdNativeMinutes  int    `mapstructure:"STUCK_THRESHOLD_NATIVE_MINUTES"`
+	StuckThresholdTokenMinutes   int    `mapstructure:"STUCK_THRESHOLD_TOKEN_MINUTES"`
+	DiscordWebhookURL            string `mapstructure:"DISCORD_WEBHOOK_URL"`
+	SMTPHost                     string `mapstructure:"SMTP_HOST"`
+	SMTPPort                     int    `mapstructure:"SMTP_PORT"`
+	SMTPUser                     string `mapstructure:"SMTP_USER"`
+	SMTPPass                     string `mapstructure:"SMTP_PASS"`
+	SMTPFrom                     string `mapstructure:"SMTP_FROM"`
+	AlertRecipients              string `mapstructure:"ALERT_RECIPIENTS"`
+	ServerPort                   string `mapstructure:"SERVER_PORT"`
+	DBPath                       string `mapstructure:"DB_PATH"`
+	NeoXTokenBridge              string `mapstructure:"NEOX_TOKEN_BRIDGE"`
+	NeoXMessageBridge            string `mapstructure:"NEOX_MESSAGE_BRIDGE"`
+	N3NeoXBridge                 string `mapstructure:"N3_NEOX_BRIDGE"`
+	N3MessageBridge              string `mapstructure:"N3_MESSAGE_BRIDGE"`
+	N3SyncConcurrency            int    `mapstructure:"N3_SYNC_CONCURRENCY"`
+	N3StartBlock                 int    `mapstructure:"N3_START_BLOCK"`
+	N3DeployBlock                int    `mapstructure:"N3_DEPLOY_BLOCK"`
+	NeoXStartBlock               int    `mapstructure:"NEOX_START_BLOCK"`
+	NeoXDeployBlock              int    `mapstructure:"NEOX_DEPLOY_BLOCK"`
+	NeoXSyncConcurrency          int    `mapstructure:"NEOX_SYNC_CONCURRENCY"`
+	N3RPCCallIntervalMs          int    `mapstructure:"N3_RPC_CALL_INTERVAL_MS"`
+	NeoXRPCCallIntervalMs        int    `mapstructure:"NEOX_RPC_CALL_INTERVAL_MS"`
+	BlockCacheDir                string `mapstructure:"BLOCK_CACHE_DIR"`
+	AutoBackfillEnabled          bool   `mapstructure:"AUTO_BACKFILL_ENABLED"`
 }
 
 type Config struct {
-	N3RPCEndpoints       []string
-	NeoXRPCEndpoints     []string
-	CORSAllowedOrigins   []string
-	CORSAllowCredentials bool
-	StuckThreshold       time.Duration
-	DiscordWebhookURL    string
-	SMTPHost             string
-	SMTPPort             int
-	SMTPUser             string
-	SMTPPass             string
-	SMTPFrom             string
-	AlertRecipients      []string
-	ServerPort           string
-	DBPath               string
-	NeoXTokenBridge      string
-	NeoXMessageBridge    string
-	N3NeoXBridge         string
-	N3MessageBridge      string
-	N3SyncConcurrency    int
-	N3StartBlock         uint64
-	NeoXStartBlock       uint64
-	NeoXSyncConcurrency  int
-	N3RPCCallInterval    time.Duration
-	NeoXRPCCallInterval  time.Duration
+	N3RPCEndpoints        []string
+	NeoXRPCEndpoints      []string
+	CORSAllowedOrigins    []string
+	CORSAllowCredentials  bool
+	StuckThreshold        time.Duration
+	StuckThresholdMessage time.Duration // 0 = use StuckThreshold for message bridge
+	StuckThresholdNative  time.Duration // 0 = use StuckThreshold for native bridge
+	StuckThresholdToken   time.Duration // 0 = use StuckThreshold for token bridge
+	DiscordWebhookURL     string
+	SMTPHost              string
+	SMTPPort              int
+	SMTPUser              string
+	SMTPPass              string
+	SMTPFrom              string
+	AlertRecipients       []string
+	ServerPort            string
+	DBPath                string
+	NeoXTokenBridge       string
+	NeoXMessageBridge     string
+	N3NeoXBridge          string
+	N3MessageBridge       string
+	N3SyncConcurrency     int
+	N3StartBlock          uint64
+	N3DeployBlock         uint64
+	NeoXStartBlock        uint64
+	NeoXDeployBlock       uint64
+	NeoXSyncConcurrency   int
+	N3RPCCallInterval     time.Duration
+	NeoXRPCCallInterval   time.Duration
+	BlockCacheDir         string
+	AutoBackfillEnabled   bool
 }
 
 // envKeys lists all environment variable names. Used by BindEnv so that
@@ -76,6 +90,9 @@ var envKeys = []string{
 	"CORS_ALLOWED_ORIGINS",
 	"CORS_ALLOW_CREDENTIALS",
 	"STUCK_THRESHOLD_MINUTES",
+	"STUCK_THRESHOLD_MESSAGE_MINUTES",
+	"STUCK_THRESHOLD_NATIVE_MINUTES",
+	"STUCK_THRESHOLD_TOKEN_MINUTES",
 	"DISCORD_WEBHOOK_URL",
 	"SMTP_HOST",
 	"SMTP_PORT",
@@ -91,14 +108,19 @@ var envKeys = []string{
 	"N3_MESSAGE_BRIDGE",
 	"N3_SYNC_CONCURRENCY",
 	"N3_START_BLOCK",
+	"N3_DEPLOY_BLOCK",
 	"NEOX_START_BLOCK",
+	"NEOX_DEPLOY_BLOCK",
 	"NEOX_SYNC_CONCURRENCY",
 	"N3_RPC_CALL_INTERVAL_MS",
 	"NEOX_RPC_CALL_INTERVAL_MS",
+	"BLOCK_CACHE_DIR",
+	"AUTO_BACKFILL_ENABLED",
 }
 
 func SetDefaults(v *viper.Viper) {
 	v.SetDefault("STUCK_THRESHOLD_MINUTES", 5)
+	v.SetDefault("STUCK_THRESHOLD_MESSAGE_MINUTES", 1440)
 	v.SetDefault("CORS_ALLOWED_ORIGINS", "")
 	v.SetDefault("CORS_ALLOW_CREDENTIALS", false)
 	v.SetDefault("SMTP_PORT", 587)
@@ -108,10 +130,15 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("NEOX_MESSAGE_BRIDGE", "0x1212000000000000000000000000000000000009")
 	v.SetDefault("N3_NEOX_BRIDGE", "0xbb19cfc864b73159277e1fd39694b3fd5fc613d2")
 	v.SetDefault("N3_MESSAGE_BRIDGE", "0xde9cc59df7484ae2f2d2c1ce7a66dccbd5c8bd11")
-	v.SetDefault("N3_SYNC_CONCURRENCY", 200)
+	v.SetDefault("N3_SYNC_CONCURRENCY", 50)
+	v.SetDefault("N3_DEPLOY_BLOCK", 6877324)
+	v.SetDefault("N3_START_BLOCK", 0)
 	v.SetDefault("NEOX_SYNC_CONCURRENCY", 20)
-	v.SetDefault("N3_RPC_CALL_INTERVAL_MS", 100)
+	v.SetDefault("NEOX_DEPLOY_BLOCK", 0)
+	v.SetDefault("NEOX_START_BLOCK", 0)
+	v.SetDefault("N3_RPC_CALL_INTERVAL_MS", 250)
 	v.SetDefault("NEOX_RPC_CALL_INTERVAL_MS", 100)
+	v.SetDefault("AUTO_BACKFILL_ENABLED", false)
 }
 
 func Load(v *viper.Viper) (*Config, error) {
@@ -142,35 +169,48 @@ func Load(v *viper.Viper) (*Config, error) {
 	if raw.N3StartBlock < 0 {
 		return nil, fmt.Errorf("N3_START_BLOCK must be >= 0, got %d", raw.N3StartBlock)
 	}
+	if raw.N3DeployBlock < 0 {
+		return nil, fmt.Errorf("N3_DEPLOY_BLOCK must be >= 0, got %d", raw.N3DeployBlock)
+	}
 	if raw.NeoXStartBlock < 0 {
 		return nil, fmt.Errorf("NEOX_START_BLOCK must be >= 0, got %d", raw.NeoXStartBlock)
 	}
+	if raw.NeoXDeployBlock < 0 {
+		return nil, fmt.Errorf("NEOX_DEPLOY_BLOCK must be >= 0, got %d", raw.NeoXDeployBlock)
+	}
 
 	cfg := &Config{
-		N3RPCEndpoints:       parseCommaSeparated(raw.N3RPCEndpoints),
-		NeoXRPCEndpoints:     parseCommaSeparated(raw.NeoXRPCEndpoints),
-		CORSAllowedOrigins:   parseCommaSeparated(raw.CORSAllowedOrigins),
-		CORSAllowCredentials: raw.CORSAllowCredentials,
-		StuckThreshold:       time.Duration(raw.StuckThresholdMinutes) * time.Minute,
-		DiscordWebhookURL:    raw.DiscordWebhookURL,
-		SMTPHost:             raw.SMTPHost,
-		SMTPPort:             raw.SMTPPort,
-		SMTPUser:             raw.SMTPUser,
-		SMTPPass:             raw.SMTPPass,
-		SMTPFrom:             raw.SMTPFrom,
-		AlertRecipients:      parseCommaSeparated(raw.AlertRecipients),
-		ServerPort:           raw.ServerPort,
-		DBPath:               raw.DBPath,
-		NeoXTokenBridge:      raw.NeoXTokenBridge,
-		NeoXMessageBridge:    raw.NeoXMessageBridge,
-		N3NeoXBridge:         raw.N3NeoXBridge,
-		N3MessageBridge:      raw.N3MessageBridge,
-		N3SyncConcurrency:    raw.N3SyncConcurrency,
-		N3StartBlock:         uint64(raw.N3StartBlock),
-		NeoXStartBlock:       uint64(raw.NeoXStartBlock),
-		NeoXSyncConcurrency:  raw.NeoXSyncConcurrency,
-		N3RPCCallInterval:    clampDuration(raw.N3RPCCallIntervalMs),
-		NeoXRPCCallInterval:  clampDuration(raw.NeoXRPCCallIntervalMs),
+		N3RPCEndpoints:        parseCommaSeparated(raw.N3RPCEndpoints),
+		NeoXRPCEndpoints:      parseCommaSeparated(raw.NeoXRPCEndpoints),
+		CORSAllowedOrigins:    parseCommaSeparated(raw.CORSAllowedOrigins),
+		CORSAllowCredentials:  raw.CORSAllowCredentials,
+		StuckThreshold:        time.Duration(raw.StuckThresholdMinutes) * time.Minute,
+		StuckThresholdMessage: time.Duration(raw.StuckThresholdMessageMinutes) * time.Minute,
+		StuckThresholdNative:  time.Duration(raw.StuckThresholdNativeMinutes) * time.Minute,
+		StuckThresholdToken:   time.Duration(raw.StuckThresholdTokenMinutes) * time.Minute,
+		DiscordWebhookURL:     raw.DiscordWebhookURL,
+		SMTPHost:              raw.SMTPHost,
+		SMTPPort:              raw.SMTPPort,
+		SMTPUser:              raw.SMTPUser,
+		SMTPPass:              raw.SMTPPass,
+		SMTPFrom:              raw.SMTPFrom,
+		AlertRecipients:       parseCommaSeparated(raw.AlertRecipients),
+		ServerPort:            raw.ServerPort,
+		DBPath:                raw.DBPath,
+		NeoXTokenBridge:       raw.NeoXTokenBridge,
+		NeoXMessageBridge:     raw.NeoXMessageBridge,
+		N3NeoXBridge:          raw.N3NeoXBridge,
+		N3MessageBridge:       raw.N3MessageBridge,
+		N3SyncConcurrency:     raw.N3SyncConcurrency,
+		N3StartBlock:          uint64(raw.N3StartBlock),
+		N3DeployBlock:         uint64(raw.N3DeployBlock),
+		NeoXStartBlock:        uint64(raw.NeoXStartBlock),
+		NeoXDeployBlock:       uint64(raw.NeoXDeployBlock),
+		NeoXSyncConcurrency:   raw.NeoXSyncConcurrency,
+		N3RPCCallInterval:     clampDuration(raw.N3RPCCallIntervalMs),
+		NeoXRPCCallInterval:   clampDuration(raw.NeoXRPCCallIntervalMs),
+		BlockCacheDir:         raw.BlockCacheDir,
+		AutoBackfillEnabled:   raw.AutoBackfillEnabled,
 	}
 
 	return cfg, nil

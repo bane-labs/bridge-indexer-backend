@@ -10,19 +10,47 @@ import (
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
 )
 
-type StuckDetector struct {
-	opStore   *datastore.OperationStore
-	alerter   alerter.Alerter
-	threshold time.Duration
-	logger    *slog.Logger
+// StuckThresholds defines how long a pending operation may age before it is marked stuck.
+// Per-type values of 0 mean "use Default for that bridge type".
+type StuckThresholds struct {
+	Default time.Duration
+	Native  time.Duration
+	Token   time.Duration
+	Message time.Duration
 }
 
-func NewStuckDetector(opStore *datastore.OperationStore, a alerter.Alerter, threshold time.Duration, logger *slog.Logger) *StuckDetector {
+// ForBridgeType returns the effective limit for the given bridge type.
+func (t StuckThresholds) ForBridgeType(bt types.BridgeType) time.Duration {
+	var override time.Duration
+	switch bt {
+	case types.BridgeTypeNative:
+		override = t.Native
+	case types.BridgeTypeToken:
+		override = t.Token
+	case types.BridgeTypeMessage:
+		override = t.Message
+	default:
+		return t.Default
+	}
+	if override > 0 {
+		return override
+	}
+	return t.Default
+}
+
+type StuckDetector struct {
+	opStore    *datastore.OperationStore
+	alerter    alerter.Alerter
+	thresholds StuckThresholds
+	logger     *slog.Logger
+}
+
+func NewStuckDetector(opStore *datastore.OperationStore, a alerter.Alerter, thresholds StuckThresholds, logger *slog.Logger) *StuckDetector {
 	return &StuckDetector{
-		opStore:   opStore,
-		alerter:   a,
-		threshold: threshold,
-		logger:    logger,
+		opStore:    opStore,
+		alerter:    a,
+		thresholds: thresholds,
+		logger:     logger,
 	}
 }
 
@@ -35,7 +63,11 @@ func (d *StuckDetector) Check(ctx context.Context) error {
 
 	now := time.Now()
 	for _, op := range ops {
-		if now.Sub(op.Timestamp) <= d.threshold {
+		if op.BridgeType == types.BridgeTypeMessage && types.MessageAMBTypeSkipsNeoXWithdrawalDest(op.AMBMessageType) {
+			continue
+		}
+		limit := d.thresholds.ForBridgeType(op.BridgeType)
+		if now.Sub(op.Timestamp) <= limit {
 			continue
 		}
 

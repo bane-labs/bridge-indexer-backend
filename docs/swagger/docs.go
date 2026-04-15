@@ -17,21 +17,25 @@ const docTemplate = `{
     "paths": {
         "/health": {
             "get": {
-                "summary": "Get overall bridge health",
                 "description": "Returns overall health status including per-bridge health summaries",
-                "tags": ["health"],
-                "produces": ["application/json"],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Get overall bridge health",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/types.OverallHealth"
+                            "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.OverallHealth"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
                         }
                     }
                 }
@@ -39,24 +43,28 @@ const docTemplate = `{
         },
         "/health/bridges": {
             "get": {
-                "summary": "Get per-bridge health details",
                 "description": "Returns health metrics for each bridge type (native, token, message)",
-                "tags": ["health"],
-                "produces": ["application/json"],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Get per-bridge health details",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/types.BridgeHealth"
+                                "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeHealth"
                             }
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
                         }
                     }
                 }
@@ -64,21 +72,25 @@ const docTemplate = `{
         },
         "/health/delays": {
             "get": {
-                "summary": "Get average completion delays",
                 "description": "Returns average completion times per bridge type for 24h and 7d windows",
-                "tags": ["health"],
-                "produces": ["application/json"],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Get average completion delays",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/types.DelayMetrics"
+                            "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.DelayMetrics"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
                         }
                     }
                 }
@@ -86,15 +98,19 @@ const docTemplate = `{
         },
         "/indexer/state": {
             "get": {
-                "summary": "Get indexer sync state",
                 "description": "Returns current indexed block height and sync status for each chain",
-                "tags": ["indexer"],
-                "produces": ["application/json"],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "indexer"
+                ],
+                "summary": "Get indexer sync state",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/IndexerStateResponse"
+                            "$ref": "#/definitions/internal_api.IndexerStateResponse"
                         }
                     }
                 }
@@ -102,56 +118,71 @@ const docTemplate = `{
         },
         "/operations": {
             "get": {
-                "summary": "List bridge operations",
                 "description": "Returns bridge operations with optional filtering by type, direction, status, and pagination",
-                "tags": ["operations"],
-                "produces": ["application/json"],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "operations"
+                ],
+                "summary": "List bridge operations",
                 "parameters": [
                     {
-                        "name": "bridge_type",
-                        "in": "query",
+                        "enum": [
+                            "native",
+                            "token",
+                            "message"
+                        ],
+                        "type": "string",
                         "description": "Filter by bridge type",
-                        "type": "string",
-                        "enum": ["native", "token", "message"]
+                        "name": "bridge_type",
+                        "in": "query"
                     },
                     {
-                        "name": "direction",
-                        "in": "query",
+                        "enum": [
+                            "deposit",
+                            "withdrawal"
+                        ],
+                        "type": "string",
                         "description": "Filter by direction",
-                        "type": "string",
-                        "enum": ["deposit", "withdrawal"]
+                        "name": "direction",
+                        "in": "query"
                     },
                     {
-                        "name": "status",
-                        "in": "query",
+                        "enum": [
+                            "pending",
+                            "completed",
+                            "stuck"
+                        ],
+                        "type": "string",
                         "description": "Filter by status",
-                        "type": "string",
-                        "enum": ["pending", "completed", "stuck"]
+                        "name": "status",
+                        "in": "query"
                     },
                     {
-                        "name": "limit",
-                        "in": "query",
+                        "type": "integer",
                         "description": "Page size (default: 50)",
-                        "type": "integer"
+                        "name": "limit",
+                        "in": "query"
                     },
                     {
-                        "name": "offset",
-                        "in": "query",
+                        "type": "integer",
                         "description": "Page offset (default: 0)",
-                        "type": "integer"
+                        "name": "offset",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/OperationsResponse"
+                            "$ref": "#/definitions/internal_api.OperationsResponse"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
                         }
                     }
                 }
@@ -159,17 +190,21 @@ const docTemplate = `{
         },
         "/operations/{nonce}": {
             "get": {
-                "summary": "Get operations by nonce",
                 "description": "Returns all bridge operations matching the given nonce across all bridge types and directions",
-                "tags": ["operations"],
-                "produces": ["application/json"],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "operations"
+                ],
+                "summary": "Get operations by nonce",
                 "parameters": [
                     {
+                        "type": "integer",
+                        "description": "Operation nonce",
                         "name": "nonce",
                         "in": "path",
-                        "description": "Operation nonce",
-                        "required": true,
-                        "type": "integer"
+                        "required": true
                     }
                 ],
                 "responses": {
@@ -178,20 +213,49 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/types.BridgeOperation"
+                                "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeOperation"
                             }
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/sync/instances": {
+            "get": {
+                "description": "Returns directional sync status derived from persisted source/destination bridge state",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sync"
+                ],
+                "summary": "List per-instance directional sync",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.DirectionalInstanceSync"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api.ErrorResponse"
                         }
                     }
                 }
@@ -199,158 +263,331 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "types.OverallHealth": {
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeHealth": {
             "type": "object",
             "properties": {
-                "status": {
-                    "type": "string"
-                },
-                "bridges": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/types.BridgeHealth"
-                    }
-                },
-                "updated_at": {
-                    "type": "string",
-                    "format": "date-time"
-                }
-            }
-        },
-        "types.BridgeHealth": {
-            "type": "object",
-            "properties": {
-                "bridge_type": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "deposits_paused": {
-                    "type": "boolean"
-                },
-                "withdrawals_paused": {
-                    "type": "boolean"
-                },
                 "avg_completion_24h_seconds": {
                     "type": "number"
                 },
                 "avg_completion_7d_seconds": {
                     "type": "number"
                 },
-                "uptime_percentage": {
-                    "type": "number"
+                "bridge_type": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeType"
+                },
+                "deposits_paused": {
+                    "type": "boolean"
                 },
                 "pending_operations": {
                     "type": "integer"
                 },
+                "status": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.HealthStatus"
+                },
                 "stuck_operations": {
                     "type": "integer"
+                },
+                "uptime_percentage": {
+                    "type": "number"
+                },
+                "withdrawals_paused": {
+                    "type": "boolean"
                 }
             }
         },
-        "types.BridgeOperation": {
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeOperation": {
             "type": "object",
             "properties": {
+                "amb_message_type": {
+                    "description": "AMBMessageType is set for NeoX MessageSend events (executable | store_only | result).\nOmitted when unknown or for non-message operations.",
+                    "type": "string"
+                },
+                "amount": {
+                    "description": "string to avoid big.Int JSON issues",
+                    "type": "string"
+                },
                 "bridge_type": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeType"
+                },
+                "completion_timestamp": {
+                    "description": "destination event time",
                     "type": "string"
-                },
-                "direction": {
-                    "type": "string"
-                },
-                "nonce": {
-                    "type": "integer"
-                },
-                "source_chain": {
-                    "type": "string"
-                },
-                "destination_chain": {
-                    "type": "string"
-                },
-                "source_block_height": {
-                    "type": "integer"
                 },
                 "dest_block_height": {
                     "type": "integer"
                 },
-                "source_tx_hash": {
+                "dest_token_contract": {
+                    "description": "destination chain token; nil for native bridge",
                     "type": "string"
                 },
                 "dest_tx_hash": {
                     "type": "string"
                 },
-                "token_contract": {
+                "destination_chain": {
+                    "description": "\"neo_n3\" or \"neo_x\"",
                     "type": "string"
                 },
-                "amount": {
-                    "type": "string"
+                "direction": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.Direction"
                 },
                 "from_address": {
+                    "type": "string"
+                },
+                "nonce": {
+                    "type": "integer"
+                },
+                "root": {
+                    "description": "deposit/withdrawal root hash from event",
+                    "type": "string"
+                },
+                "source_block_height": {
+                    "type": "integer"
+                },
+                "source_chain": {
+                    "description": "\"neo_n3\" or \"neo_x\"",
+                    "type": "string"
+                },
+                "source_tx_hash": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.OperationStatus"
+                },
+                "timestamp": {
+                    "description": "source event time",
                     "type": "string"
                 },
                 "to_address": {
                     "type": "string"
                 },
-                "timestamp": {
-                    "type": "string",
-                    "format": "date-time"
-                },
-                "completion_timestamp": {
-                    "type": "string",
-                    "format": "date-time"
-                },
-                "status": {
+                "token_contract": {
+                    "description": "source chain token; nil for native bridge",
                     "type": "string"
                 }
             }
         },
-        "types.DelayMetrics": {
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeType": {
+            "type": "string",
+            "enum": [
+                "native",
+                "token",
+                "message"
+            ],
+            "x-enum-varnames": [
+                "BridgeTypeNative",
+                "BridgeTypeToken",
+                "BridgeTypeMessage"
+            ]
+        },
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.DelayMetrics": {
             "type": "object",
             "properties": {
                 "avg_24h_seconds": {
                     "type": "object",
                     "additionalProperties": {
-                        "type": "number"
+                        "type": "number",
+                        "format": "float64"
                     }
                 },
                 "avg_7d_seconds": {
                     "type": "object",
                     "additionalProperties": {
-                        "type": "number"
+                        "type": "number",
+                        "format": "float64"
                     }
                 }
             }
         },
-        "IndexerStateResponse": {
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.Direction": {
+            "type": "string",
+            "enum": [
+                "deposit",
+                "withdrawal"
+            ],
+            "x-enum-comments": {
+                "DirectionDeposit": "N3 → NeoX",
+                "DirectionWithdrawal": "NeoX → N3"
+            },
+            "x-enum-descriptions": [
+                "N3 → NeoX",
+                "NeoX → N3"
+            ],
+            "x-enum-varnames": [
+                "DirectionDeposit",
+                "DirectionWithdrawal"
+            ]
+        },
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.DirectionalInstanceSync": {
             "type": "object",
             "properties": {
-                "neo_n3": {
-                    "type": "object"
+                "bridge_type": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeType"
                 },
-                "neo_x": {
-                    "type": "object"
+                "delta_nonce": {
+                    "type": "integer"
+                },
+                "dst_chain": {
+                    "type": "string"
+                },
+                "dst_nonce": {
+                    "type": "integer"
+                },
+                "dst_root": {
+                    "type": "string"
+                },
+                "dst_token": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "reason": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.DirectionalSyncReason"
+                },
+                "src_chain": {
+                    "type": "string"
+                },
+                "src_nonce": {
+                    "type": "integer"
+                },
+                "src_root": {
+                    "type": "string"
+                },
+                "src_token": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.DirectionalSyncStatus"
                 }
             }
         },
-        "OperationsResponse": {
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.DirectionalSyncReason": {
+            "type": "string",
+            "enum": [
+                "SYNCED",
+                "SOURCE_NONCE_GREATER_THAN_DESTINATION",
+                "ROOT_MISMATCH_AT_EQUAL_NONCE",
+                "MISSING_STATE",
+                "INVARIANT_VIOLATION"
+            ],
+            "x-enum-varnames": [
+                "DirectionalSyncReasonSynced",
+                "DirectionalSyncReasonSourceNonceGreater",
+                "DirectionalSyncReasonRootMismatchAtEqualNonce",
+                "DirectionalSyncReasonMissingState",
+                "DirectionalSyncReasonInvariantViolation"
+            ]
+        },
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.DirectionalSyncStatus": {
+            "type": "string",
+            "enum": [
+                "synced",
+                "source_ahead",
+                "root_mismatch",
+                "unknown"
+            ],
+            "x-enum-varnames": [
+                "DirectionalSyncStatusSynced",
+                "DirectionalSyncStatusSourceAhead",
+                "DirectionalSyncStatusRootMismatch",
+                "DirectionalSyncStatusUnknown"
+            ]
+        },
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.HealthStatus": {
+            "type": "string",
+            "enum": [
+                "healthy",
+                "degraded",
+                "unhealthy"
+            ],
+            "x-enum-varnames": [
+                "HealthStatusHealthy",
+                "HealthStatusDegraded",
+                "HealthStatusUnhealthy"
+            ]
+        },
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.IndexerState": {
+            "type": "object",
+            "properties": {
+                "chain": {
+                    "description": "\"neo_n3\" or \"neo_x\"",
+                    "type": "string"
+                },
+                "is_syncing": {
+                    "type": "boolean"
+                },
+                "last_block_hash": {
+                    "description": "for reorg detection",
+                    "type": "string"
+                },
+                "last_block_height": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.OperationStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "completed",
+                "stuck"
+            ],
+            "x-enum-varnames": [
+                "StatusPending",
+                "StatusCompleted",
+                "StatusStuck"
+            ]
+        },
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.OverallHealth": {
+            "type": "object",
+            "properties": {
+                "bridges": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeHealth"
+                    }
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.HealthStatus"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.ErrorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api.IndexerStateResponse": {
+            "type": "object",
+            "properties": {
+                "neo_n3": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.IndexerState"
+                },
+                "neo_x": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.IndexerState"
+                }
+            }
+        },
+        "internal_api.OperationsResponse": {
             "type": "object",
             "properties": {
                 "operations": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/types.BridgeOperation"
+                        "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeOperation"
                     }
                 },
                 "total": {
                     "type": "integer"
-                }
-            }
-        },
-        "ErrorResponse": {
-            "type": "object",
-            "properties": {
-                "error": {
-                    "type": "string"
                 }
             }
         }

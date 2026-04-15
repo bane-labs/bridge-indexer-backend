@@ -79,7 +79,7 @@ func TestServerStartup_BootAndShutdown(t *testing.T) {
 	// 5. Monitor components — created but NOT started
 	multiAlerter := alerter.NewMultiAlerter(&alerter.NoopAlerter{})
 	pauseDetector := monitor.NewPauseDetector(store, logger)
-	stuckDetector := monitor.NewStuckDetector(opStore, multiAlerter, 5*time.Minute, logger)
+	stuckDetector := monitor.NewStuckDetector(opStore, multiAlerter, monitor.StuckThresholds{Default: 5 * time.Minute}, logger)
 	healthAgg := monitor.NewHealthAggregator(opStore, pauseDetector, logger)
 	mon := monitor.NewMonitor(stuckDetector, pauseDetector, healthAgg, logger)
 	_ = mon

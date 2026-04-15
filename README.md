@@ -136,7 +136,7 @@ Alert channels are enabled only when full config is present. Missing optional al
 ```bash
 cp .env.example .env
 # Edit .env with your RPC endpoints
-go run cmd/server/main.go
+go run ./cmd/server
 ```
 
 ### Production Mode
@@ -146,6 +146,24 @@ go build -o bin/bridge-indexer cmd/server/main.go
 NEO_N3_RPC_ENDPOINTS="https://your-n3-rpc" \
 NEOX_RPC_ENDPOINTS="https://your-neox-rpc" \
 ./bin/bridge-indexer
+```
+
+Run the package directory (recommended) so all command files are compiled:
+
+```bash
+go run ./cmd/server
+```
+
+Run backfill mode:
+
+```bash
+go run ./cmd/server backfill
+```
+
+Run live status dashboard:
+
+```bash
+go run ./cmd/server status
 ```
 
 Must be able to run as a single binary. Suitable for long-running indexing workloads.

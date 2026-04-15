@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -20,7 +21,7 @@ import (
 const (
 	chainNeoX                     = "neo_x"
 	neoxPollInterval              = 3 * time.Second
-	neoxSafetyDepth        uint64 = 20
+	neoxSafetyDepth        uint64 = 0
 	neoxMaxBlockRange      uint64 = 5000
 	neoxCheckpointInterval        = 50 // flush checkpoint every N no-op ranges
 )
@@ -202,9 +203,18 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 		return nil, nil, fmt.Errorf("filter logs %d-%d: %w", from, to, err)
 	}
 
-	var allOps []*types.BridgeOperation
-	headerCache := map[uint64]*ethtypes.Header{}
+	// Collect unique block numbers that need headers (log blocks + to-block).
+	needHeaders := map[uint64]struct{}{to: {}}
+	for _, l := range logs {
+		if !l.Removed {
+			needHeaders[l.BlockNumber] = struct{}{}
+		}
+	}
 
+	// Fetch all required headers concurrently.
+	headerCache := idx.prefetchHeaders(ctx, needHeaders)
+
+	var allOps []*types.BridgeOperation
 	for _, l := range logs {
 		if l.Removed {
 			idx.logger.Warn("Reorg detected: removed log",
@@ -218,20 +228,13 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 			continue
 		}
 
-		// Per-log header fetch with cache to get accurate block timestamp.
 		header, ok := headerCache[l.BlockNumber]
 		if !ok {
-			var hErr error
-			header, hErr = idx.client.HeaderByNumber(ctx, new(big.Int).SetUint64(l.BlockNumber))
-			if hErr != nil {
-				idx.logger.Warn("Failed to fetch header for log",
-					"block", l.BlockNumber,
-					"tx", l.TxHash.Hex(),
-					"error", hErr,
-				)
-				continue
-			}
-			headerCache[l.BlockNumber] = header
+			idx.logger.Warn("Missing header for log (skipped)",
+				"block", l.BlockNumber,
+				"tx", l.TxHash.Hex(),
+			)
+			continue
 		}
 		blockTime := time.Unix(int64(header.Time), 0)
 
@@ -258,21 +261,8 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 		}
 	}
 
-	// Fetch to-block header for LastBlockHash (may already be cached).
-	toHeader, ok := headerCache[to]
-	if !ok {
-		var hErr error
-		toHeader, hErr = idx.client.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
-		if hErr != nil {
-			idx.logger.Warn("Failed to fetch header for to-block",
-				"block", to,
-				"error", hErr,
-			)
-		}
-	}
-
 	lastBlockHash := ""
-	if toHeader != nil {
+	if toHeader, ok := headerCache[to]; ok {
 		lastBlockHash = toHeader.Hash().Hex()
 	}
 
@@ -289,6 +279,44 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 	}
 
 	return newState, allOps, nil
+}
+
+// prefetchHeaders fetches all required block headers concurrently.
+func (idx *NeoXIndexer) prefetchHeaders(ctx context.Context, blocks map[uint64]struct{}) map[uint64]*ethtypes.Header {
+	const maxConcurrent = 10
+	sem := make(chan struct{}, maxConcurrent)
+
+	type result struct {
+		num uint64
+		hdr *ethtypes.Header
+	}
+
+	results := make(chan result, len(blocks))
+	var wg sync.WaitGroup
+
+	for bn := range blocks {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(num uint64) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			hdr, err := idx.client.HeaderByNumber(ctx, new(big.Int).SetUint64(num))
+			if err != nil {
+				idx.logger.Warn("Failed to fetch header", "block", num, "error", err)
+				return
+			}
+			results <- result{num: num, hdr: hdr}
+		}(bn)
+	}
+
+	wg.Wait()
+	close(results)
+
+	cache := make(map[uint64]*ethtypes.Header, len(blocks))
+	for r := range results {
+		cache[r.num] = r.hdr
+	}
+	return cache
 }
 
 // buildBridgeStateWriteOps builds atomic write ops for bridge state updates.

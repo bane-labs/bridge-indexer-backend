@@ -26,7 +26,7 @@ jobs:
 
       - name: Verify formatting (gofmt -s)
         run: |
-          unformatted="$(gofmt -s -l cmd internal)"
+          unformatted="$(gofmt -s -l cmd internal pkg)"
           if [ -n "$unformatted" ]; then
             echo "The following files are not formatted:"
             echo "$unformatted"
@@ -36,7 +36,7 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
-  build-test:
+  test:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,8 +51,26 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Run tests
+        run: go test -race -count=1 ./...
+
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: [lint, test]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Build server binary
         run: go build -trimpath -ldflags="-w -s" -o /tmp/bridge-indexer ./cmd/server
 
-      - name: Run tests
-        run: go test ./...
+

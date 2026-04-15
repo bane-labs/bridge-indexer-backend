@@ -293,6 +293,10 @@ func (p *N3EventProcessorImpl) handleTokenWithdrawalComplete(
 	}
 
 	// items[0] = NeoN3Token (skip)
+	destToken, err := itemToAddressString(items[0])
+	if err != nil {
+		return nil, fmt.Errorf("TokenWithdrawal token: %w", err)
+	}
 	// items[1] = Nonce
 	nonce, err := itemToUint64(items[1])
 	if err != nil {
@@ -300,8 +304,8 @@ func (p *N3EventProcessorImpl) handleTokenWithdrawalComplete(
 	}
 
 	destBlock := uint64(blockHeight)
-	err = p.storer.UpdateOperationCompletion(
-		types.BridgeTypeToken, types.DirectionWithdrawal, nonce,
+	err = p.storer.UpdateTokenOperationCompletionByDestToken(
+		types.DirectionWithdrawal, nonce, destToken,
 		destBlock, txHash, blockTime,
 	)
 	if err == nil {

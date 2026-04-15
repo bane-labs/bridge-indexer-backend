@@ -153,6 +153,49 @@ func TestExtractNeoXNonce_Execution(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestExtractNeoXNonceAndType — returns bridge type alongside nonce
+// ---------------------------------------------------------------------------
+
+func TestExtractNeoXNonceAndType(t *testing.T) {
+	tests := []struct {
+		name     string
+		sig      common.Hash
+		topics   int
+		wantType types.BridgeType
+		nonce    uint64
+	}{
+		{"NativeDeposit", sigNativeDeposit, 2, types.BridgeTypeNative, 42},
+		{"TokenDeposit", sigTokenDeposit, 3, types.BridgeTypeToken, 7},
+		{"Execution", sigExecution, 2, types.BridgeTypeMessage, 99},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nonceTopic := common.BigToHash(new(big.Int).SetUint64(tt.nonce))
+			topics := []common.Hash{tt.sig}
+			for i := 1; i < tt.topics; i++ {
+				if i == tt.topics-1 {
+					topics = append(topics, nonceTopic)
+				} else {
+					topics = append(topics, common.BigToHash(big.NewInt(0)))
+				}
+			}
+			log := ethtypes.Log{Topics: topics}
+			bt, nonce, ok := extractNeoXNonceAndType(log)
+			if !ok {
+				t.Fatal("expected ok=true")
+			}
+			if bt != tt.wantType {
+				t.Fatalf("bridge type = %s, want %s", bt, tt.wantType)
+			}
+			if nonce != tt.nonce {
+				t.Fatalf("nonce = %d, want %d", nonce, tt.nonce)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestExtractNeoXNonce — Unknown topic
 // ---------------------------------------------------------------------------
 

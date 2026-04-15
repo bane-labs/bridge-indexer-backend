@@ -430,3 +430,110 @@ func TestOperationStore_UpdateCompletionWithoutBridgeState(t *testing.T) {
 		t.Fatalf("expected dest tx hash 0xno_bridge_state")
 	}
 }
+
+func TestOperationStore_DeferredCompletionReconciledOnSave_Native(t *testing.T) {
+	s := newTestStore(t)
+	bss := NewBridgeStateStore(s)
+	os := NewOperationStore(s, bss)
+
+	completionTime := time.Date(2026, 1, 1, 0, 5, 0, 0, time.UTC)
+	if err := os.UpdateOperationCompletion(
+		types.BridgeTypeNative, types.DirectionDeposit, 42,
+		2000, "0xlate", completionTime,
+	); err != nil {
+		t.Fatalf("deferred completion: %v", err)
+	}
+
+	state := &types.IndexerState{
+		Chain:           "neo_n3",
+		LastBlockHeight: 100,
+		LastBlockHash:   "0xblock100",
+		UpdatedAt:       time.Now(),
+	}
+	op := sampleOp()
+	root := "0xroot42"
+	op.Root = &root
+
+	sourceOps, err := bss.BuildSourceStateWriteOps([]*types.BridgeOperation{op})
+	if err != nil {
+		t.Fatalf("build source ops: %v", err)
+	}
+	if err := s.SaveIndexerStateWithOperationsAndExtra(state, []*types.BridgeOperation{op}, sourceOps); err != nil {
+		t.Fatalf("save state with reconciled op: %v", err)
+	}
+
+	got, err := os.GetOperation(types.BridgeTypeNative, types.DirectionDeposit, 42)
+	if err != nil {
+		t.Fatalf("get op: %v", err)
+	}
+	if got.Status != types.StatusCompleted {
+		t.Fatalf("expected completed, got %s", got.Status)
+	}
+	if got.DestTxHash == nil || *got.DestTxHash != "0xlate" {
+		t.Fatalf("expected reconciled dest tx hash")
+	}
+
+	instanceID := BuildInstanceID("native", "neo_n3", "neo_x", nil, nil)
+	st, err := bss.GetBridgeState(instanceID)
+	if err != nil {
+		t.Fatalf("get bridge state: %v", err)
+	}
+	if st.DestState == nil || st.DestState.Root == nil || *st.DestState.Root != "0xroot42" {
+		t.Fatalf("expected destination root to be filled from source operation")
+	}
+}
+
+func TestOperationStore_DeferredCompletionReconciledOnSave_Token(t *testing.T) {
+	s := newTestStore(t)
+	bss := NewBridgeStateStore(s)
+	os := NewOperationStore(s, bss)
+
+	completionTime := time.Date(2026, 1, 1, 0, 5, 0, 0, time.UTC)
+	if err := os.UpdateOperationCompletion(
+		types.BridgeTypeToken, types.DirectionDeposit, 99,
+		3000, "0xtokenlate", completionTime,
+	); err != nil {
+		t.Fatalf("deferred completion: %v", err)
+	}
+
+	state := &types.IndexerState{
+		Chain:           "neo_n3",
+		LastBlockHeight: 101,
+		LastBlockHash:   "0xblock101",
+		UpdatedAt:       time.Now(),
+	}
+	op := sampleOp()
+	op.BridgeType = types.BridgeTypeToken
+	op.Nonce = 99
+	srcToken := "0xSrc"
+	dstToken := "0xDst"
+	root := "0xtokenroot"
+	op.TokenContract = &srcToken
+	op.DestTokenContract = &dstToken
+	op.Root = &root
+
+	sourceOps, err := bss.BuildSourceStateWriteOps([]*types.BridgeOperation{op})
+	if err != nil {
+		t.Fatalf("build source ops: %v", err)
+	}
+	if err := s.SaveIndexerStateWithOperationsAndExtra(state, []*types.BridgeOperation{op}, sourceOps); err != nil {
+		t.Fatalf("save state with reconciled token op: %v", err)
+	}
+
+	got, err := os.GetOperation(types.BridgeTypeToken, types.DirectionDeposit, 99)
+	if err != nil {
+		t.Fatalf("get op: %v", err)
+	}
+	if got.Status != types.StatusCompleted {
+		t.Fatalf("expected completed, got %s", got.Status)
+	}
+
+	instanceID := BuildInstanceID("token", "neo_n3", "neo_x", &srcToken, &dstToken)
+	st, err := bss.GetBridgeState(instanceID)
+	if err != nil {
+		t.Fatalf("get bridge state: %v", err)
+	}
+	if st.DestState == nil || st.DestState.Root == nil || *st.DestState.Root != "0xtokenroot" {
+		t.Fatalf("expected token destination root to be filled from source operation")
+	}
+}

@@ -28,6 +28,27 @@ const (
 	StatusStuck     OperationStatus = "stuck"
 )
 
+// AMB message kinds from NeoX MessageSend encodedMetadata (AMBTypes.MessageType).
+const (
+	AMBMessageTypeExecutable = "executable"
+	AMBMessageTypeStoreOnly  = "store_only"
+	AMBMessageTypeResult     = "result"
+)
+
+// MessageAMBTypeSkipsNeoXWithdrawalDest returns true when this NeoX→N3 message
+// does not expect a matching N3 Execution completion (STORE_ONLY / RESULT).
+func MessageAMBTypeSkipsNeoXWithdrawalDest(t *string) bool {
+	if t == nil {
+		return false
+	}
+	switch *t {
+	case AMBMessageTypeStoreOnly, AMBMessageTypeResult:
+		return true
+	default:
+		return false
+	}
+}
+
 // BridgeOperation represents a single bridge operation with all 15 PD §4.2
 // indexed fields plus Status.
 type BridgeOperation struct {
@@ -49,6 +70,9 @@ type BridgeOperation struct {
 	Timestamp           time.Time       `json:"timestamp"`                      // source event time
 	CompletionTimestamp *time.Time      `json:"completion_timestamp,omitempty"` // destination event time
 	Status              OperationStatus `json:"status"`
+	// AMBMessageType is set for NeoX MessageSend events (executable | store_only | result).
+	// Omitted when unknown or for non-message operations.
+	AMBMessageType *string `json:"amb_message_type,omitempty"`
 }
 
 // ChainState represents the latest observed state on one side of a directional bridge.
