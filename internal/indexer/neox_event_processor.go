@@ -26,6 +26,9 @@ var (
 
 	sigMessageSend = crypto.Keccak256Hash([]byte("MessageSend(uint256,address,bytes,bytes,bytes32,bytes32)"))
 	sigExecution   = crypto.Keccak256Hash([]byte("Execution(uint256,uint8)"))
+	// NeoToEvmRootUpdate(uint256 indexed nonce, bytes32 neoToEvmRoot).
+	// This event is emitted when Neo->EVM messages are stored on NeoX.
+	sigNeoToEvmRootUpdate = common.HexToHash("0x6ce5f7b1b84fc58cd01b1dae9032b3dc9aec8216eebb3433b379f5f58d8e71e6")
 
 	sigBridgePause         = crypto.Keccak256Hash([]byte("BridgePause()"))
 	sigBridgeUnpause       = crypto.Keccak256Hash([]byte("BridgeUnpause()"))
@@ -52,6 +55,12 @@ type NeoXEventProcessorImpl struct {
 	tokenBridge   common.Address
 	messageBridge common.Address
 	logger        *slog.Logger
+}
+
+// Optional extension for storers that can mirror Neo->EVM message root updates
+// observed on NeoX into directional bridge state.
+type messageDepositMirrorUpdater interface {
+	UpdateMessageDepositMirror(nonce uint64, root string, observedBlock uint64, observedTxHash string, observedTime time.Time) error
 }
 
 func NewNeoXEventProcessor(
@@ -133,6 +142,9 @@ func (p *NeoXEventProcessorImpl) processMessageBridgeLog(
 		return op, nil, err
 	case sigExecution:
 		op, err := p.handleMessageExecution(log, blockTime)
+		return op, nil, err
+	case sigNeoToEvmRootUpdate:
+		op, err := p.handleNeoToEvmRootUpdate(log, blockTime)
 		return op, nil, err
 	case sigPause:
 		return nil, &PauseState{BridgeType: types.BridgeTypeMessage, Paused: true, Scope: "all"}, nil
@@ -266,11 +278,12 @@ func (p *NeoXEventProcessorImpl) handleTokenDepositComplete(log ethtypes.Log, bl
 		return nil, nil
 	}
 
+	destToken := common.BytesToAddress(log.Topics[1].Bytes()).Hex()
 	nonce := new(big.Int).SetBytes(log.Topics[2].Bytes()).Uint64()
 	destBlock := log.BlockNumber
 
-	err := p.storer.UpdateOperationCompletion(
-		types.BridgeTypeToken, types.DirectionDeposit, nonce,
+	err := p.storer.UpdateTokenOperationCompletionByDestToken(
+		types.DirectionDeposit, nonce, destToken,
 		destBlock, log.TxHash.Hex(), blockTime,
 	)
 	if err != nil {
@@ -288,16 +301,18 @@ func (p *NeoXEventProcessorImpl) handleMessageSend(log ethtypes.Log, blockTime t
 	nonce := new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64()
 	sender := common.BytesToAddress(log.Topics[2].Bytes())
 
-	// The newEvmToNeoRoot is the last 32 bytes of log.Data.
-	// Data layout: offset(encodedMetadata) + offset(message) + messageHash(32) + newEvmToNeoRoot(32) + ...
-	// We extract the root from the last 32 bytes as it's always appended at the end by the contract.
+	// ABI head for non-indexed args:
+	// [offset(encodedMetadata), offset(message), messageHash(32), newEvmToNeoRoot(32)].
+	// The root is fixed at bytes [96:128] in the head, not at the tail.
 	var root *string
-	if len(log.Data) >= 32 {
-		r := common.BytesToHash(log.Data[len(log.Data)-32:]).Hex()
+	if len(log.Data) >= 128 {
+		r := common.BytesToHash(log.Data[96:128]).Hex()
 		root = &r
 	}
 
-	return &types.BridgeOperation{
+	ambType := ambTypePtrFromMessageSendData(log.Data)
+
+	op := &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeMessage,
 		Direction:         types.DirectionWithdrawal,
 		Nonce:             nonce,
@@ -310,7 +325,16 @@ func (p *NeoXEventProcessorImpl) handleMessageSend(log ethtypes.Log, blockTime t
 		ToAddress:         "",
 		Timestamp:         blockTime,
 		Status:            types.StatusPending,
-	}, nil
+		AMBMessageType:    ambType,
+	}
+	// STORE_ONLY and RESULT messages do not use the N3 Execution completion path for
+	// NeoX→N3 withdrawals (see bridge-evm AMBTypes.MessageType).
+	if types.MessageAMBTypeSkipsNeoXWithdrawalDest(ambType) {
+		op.Status = types.StatusCompleted
+		ct := blockTime
+		op.CompletionTimestamp = &ct
+	}
+	return op, nil
 }
 
 func (p *NeoXEventProcessorImpl) handleMessageExecution(log ethtypes.Log, blockTime time.Time) (*types.BridgeOperation, error) {
@@ -328,6 +352,38 @@ func (p *NeoXEventProcessorImpl) handleMessageExecution(log ethtypes.Log, blockT
 	)
 	if err != nil {
 		p.logger.Debug("No pending message deposit for nonce", "nonce", nonce)
+	}
+	return nil, nil
+}
+
+func (p *NeoXEventProcessorImpl) handleNeoToEvmRootUpdate(log ethtypes.Log, blockTime time.Time) (*types.BridgeOperation, error) {
+	if len(log.Topics) < 2 {
+		return nil, nil
+	}
+	nonce := new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64()
+
+	// NeoToEvmRootUpdate carries the Neo->EVM root in data (bytes32).
+	// Use it to update deposit completion and mirror source visibility when
+	// historical N3 MessageSend logs are missing.
+	var rootHex string
+	if len(log.Data) >= 32 {
+		rootHex = fmt.Sprintf("%x", log.Data[:32])
+	}
+
+	destBlock := log.BlockNumber
+	if err := p.storer.UpdateOperationCompletion(
+		types.BridgeTypeMessage, types.DirectionDeposit, nonce,
+		destBlock, log.TxHash.Hex(), blockTime,
+	); err != nil {
+		p.logger.Debug("No pending message deposit for nonce", "nonce", nonce)
+	}
+
+	if rootHex != "" {
+		if mirror, ok := p.storer.(messageDepositMirrorUpdater); ok {
+			if err := mirror.UpdateMessageDepositMirror(nonce, rootHex, log.BlockNumber, log.TxHash.Hex(), blockTime); err != nil {
+				p.logger.Debug("Failed to mirror message deposit state from alt execution", "nonce", nonce, "error", err)
+			}
+		}
 	}
 	return nil, nil
 }

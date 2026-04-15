@@ -33,10 +33,11 @@ type Handler struct {
 	store   *datastore.Store
 	opStore *datastore.OperationStore
 	health  *monitor.HealthAggregator
+	sync    *monitor.SyncComputer
 }
 
-func NewHandler(store *datastore.Store, opStore *datastore.OperationStore, health *monitor.HealthAggregator) *Handler {
-	return &Handler{store: store, opStore: opStore, health: health}
+func NewHandler(store *datastore.Store, opStore *datastore.OperationStore, health *monitor.HealthAggregator, sync *monitor.SyncComputer) *Handler {
+	return &Handler{store: store, opStore: opStore, health: health, sync: sync}
 }
 
 func RegisterRoutes(e *echo.Echo, h *Handler) {
@@ -46,6 +47,7 @@ func RegisterRoutes(e *echo.Echo, h *Handler) {
 	e.GET("/indexer/state", h.GetIndexerState)
 	e.GET("/operations", h.GetOperations)
 	e.GET("/operations/:nonce", h.GetOperationByNonce)
+	e.GET("/sync/instances", h.GetSyncInstances)
 }
 
 // GetHealth godoc
@@ -193,23 +195,9 @@ func (h *Handler) GetOperationByNonce(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid nonce"})
 	}
 
-	var results []types.BridgeOperation
-	bridgeTypes := []types.BridgeType{types.BridgeTypeNative, types.BridgeTypeToken, types.BridgeTypeMessage}
-	directions := []types.Direction{types.DirectionDeposit, types.DirectionWithdrawal}
-
-	for _, bt := range bridgeTypes {
-		for _, dir := range directions {
-			op, err := h.opStore.GetOperation(bt, dir, nonce)
-			if err != nil && !errors.Is(err, datastore.ErrNotFound) {
-				return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			}
-			if errors.Is(err, datastore.ErrNotFound) {
-				continue
-			}
-			if err == nil {
-				results = append(results, *op)
-			}
-		}
+	results, err := h.opStore.GetOperationsByNonce(nonce)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	if len(results) == 0 {
@@ -217,4 +205,23 @@ func (h *Handler) GetOperationByNonce(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, results)
+}
+
+// GetSyncInstances godoc
+// @Summary      List per-instance directional sync
+// @Description  Returns directional sync status derived from persisted source/destination bridge state
+// @Tags         sync
+// @Produce      json
+// @Success      200  {array}   types.DirectionalInstanceSync
+// @Failure      500  {object}  ErrorResponse
+// @Router       /sync/instances [get]
+func (h *Handler) GetSyncInstances(c echo.Context) error {
+	if h.sync == nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "sync computer not configured"})
+	}
+	syncs, err := h.sync.ComputeAll()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	return c.JSON(http.StatusOK, syncs)
 }

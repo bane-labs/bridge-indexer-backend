@@ -25,6 +25,7 @@ import (
 	"github.com/bane-labs/bridge-indexer-backend/internal/indexer"
 	"github.com/bane-labs/bridge-indexer-backend/internal/monitor"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
+	"github.com/bane-labs/bridge-indexer-backend/pkg/blockcache"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/n3"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/neox"
 )
@@ -38,6 +39,7 @@ type appRuntime struct {
 	neoxIndexer *indexer.NeoXIndexer
 	monitor     *monitor.Monitor
 	server      *http.Server
+	blockCache  *blockcache.Cache
 }
 
 func loadConfig(v *viper.Viper, logger *slog.Logger) (*config.Config, error) {
@@ -92,6 +94,11 @@ func (rt *appRuntime) Close(logger *slog.Logger) {
 			logger.Error("Failed to close datastore", "error", err)
 		}
 	}
+	if rt.blockCache != nil {
+		if err := rt.blockCache.Close(); err != nil {
+			logger.Error("Failed to close block cache", "error", err)
+		}
+	}
 }
 
 func buildRuntime(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*appRuntime, error) {
@@ -102,6 +109,9 @@ func buildRuntime(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 	bridgeStateStore := datastore.NewBridgeStateStore(store)
 	opStore := datastore.NewOperationStore(store, bridgeStateStore)
 	initializeStaticBridgeStates(bridgeStateStore, logger)
+	if err := bridgeStateStore.RebuildFromOperations(logger); err != nil {
+		logger.Error("Failed to rebuild bridge states from operations", "error", err)
+	}
 
 	n3PoolSize := cfg.N3SyncConcurrency
 	if n3PoolSize > 500 {
@@ -120,6 +130,20 @@ func buildRuntime(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 		return nil, fmt.Errorf("failed to create Neo X client: %w", err)
 	}
 
+	var bc *blockcache.Cache
+	if cfg.BlockCacheDir != "" {
+		bc, err = blockcache.New(cfg.BlockCacheDir, logger)
+		if err != nil {
+			neoxClient.Close()
+			n3Client.Close()
+			_ = store.Close()
+			return nil, fmt.Errorf("failed to open block cache: %w", err)
+		}
+		n3Client.SetCache(bc)
+		neoxClient.SetCache(bc)
+		logger.Info("RPC block cache enabled", "dir", cfg.BlockCacheDir)
+	}
+
 	n3Contracts, neoxContracts := bridgeContracts(cfg)
 	n3EventProc, err := indexer.NewN3EventProcessor(opStore, n3Contracts[0], n3Contracts[1], logger)
 	if err != nil {
@@ -131,7 +155,7 @@ func buildRuntime(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 
 	n3Indexer, err := indexer.NewN3Indexer(
 		n3Client, store, opStore, bridgeStateStore, n3EventProc, n3Contracts,
-		cfg.N3StartBlock, cfg.N3SyncConcurrency, logger,
+		effectiveStartBlock(cfg.N3StartBlock, cfg.N3DeployBlock), cfg.N3SyncConcurrency, logger,
 	)
 	if err != nil {
 		neoxClient.Close()
@@ -144,11 +168,16 @@ func buildRuntime(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 	pauseDetector := monitor.NewPauseDetector(store, logger)
 	neoxIndexer := indexer.NewNeoXIndexer(
 		neoxClient, store, opStore, bridgeStateStore, neoxEventProc, neoxContracts,
-		cfg.NeoXStartBlock, cfg.NeoXSyncConcurrency, logger, pauseDetector,
+		effectiveStartBlock(cfg.NeoXStartBlock, cfg.NeoXDeployBlock), cfg.NeoXSyncConcurrency, logger, pauseDetector,
 	)
 
 	multiAlerter := buildAlerter(cfg, logger)
-	stuckDetector := monitor.NewStuckDetector(opStore, multiAlerter, cfg.StuckThreshold, logger)
+	stuckDetector := monitor.NewStuckDetector(opStore, multiAlerter, monitor.StuckThresholds{
+		Default: cfg.StuckThreshold,
+		Native:  cfg.StuckThresholdNative,
+		Token:   cfg.StuckThresholdToken,
+		Message: cfg.StuckThresholdMessage,
+	}, logger)
 	healthAgg := monitor.NewHealthAggregator(opStore, pauseDetector, logger)
 	mon := monitor.NewMonitor(stuckDetector, pauseDetector, healthAgg, logger)
 
@@ -168,6 +197,7 @@ func buildRuntime(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 		neoxIndexer: neoxIndexer,
 		monitor:     mon,
 		server:      server,
+		blockCache:  bc,
 	}, nil
 }
 
@@ -238,7 +268,9 @@ func newHTTPAPI(
 	} else {
 		logger.Info("CORS disabled, no allowed origins configured")
 	}
-	handler := api.NewHandler(store, opStore, healthAgg)
+	bridgeStateStore := datastore.NewBridgeStateStore(store)
+	syncComputer := monitor.NewSyncComputer(bridgeStateStore, logger)
+	handler := api.NewHandler(store, opStore, healthAgg, syncComputer)
 	api.RegisterRoutes(e, handler)
 	e.GET("/swagger/*", echoSwagger.WrapHandler)
 	logger.Info("API routes registered")
@@ -252,6 +284,13 @@ func bridgeContracts(cfg *config.Config) (n3Contracts []string, neoxContracts []
 	}
 	neoxContracts = []string{cfg.NeoXTokenBridge, cfg.NeoXMessageBridge}
 	return n3Contracts, neoxContracts
+}
+
+func effectiveStartBlock(startBlock, deployBlock uint64) uint64 {
+	if deployBlock > startBlock {
+		return deployBlock
+	}
+	return startBlock
 }
 
 func startBackgroundWorkers(ctx context.Context, cfg *config.Config, rt *appRuntime, logger *slog.Logger) {
@@ -273,7 +312,11 @@ func startBackgroundWorkers(ctx context.Context, cfg *config.Config, rt *appRunt
 			logger.Error("Monitor error", "error", err)
 		}
 	}()
-	go runAutoBackfillWhenSynced(ctx, cfg, rt, logger)
+	if cfg.AutoBackfillEnabled {
+		go runAutoBackfillWhenSynced(ctx, cfg, rt, logger)
+	} else {
+		logger.Info("Auto-backfill disabled")
+	}
 }
 
 func runAutoBackfillWhenSynced(ctx context.Context, cfg *config.Config, rt *appRuntime, logger *slog.Logger) {
@@ -340,6 +383,16 @@ func runAutoBackfillWhenSynced(ctx context.Context, cfg *config.Config, rt *appR
 
 		if neoxConsecutiveSynced >= requiredConsecutive && n3ConsecutiveSynced >= requiredConsecutive {
 			backfillOnce.Do(func() {
+				stuck := types.StatusStuck
+				stuckCount, countErr := rt.opStore.CountOperations(datastore.OperationFilter{Status: &stuck})
+				if countErr != nil {
+					logger.Warn("Auto-backfill: failed to count stuck operations", "error", countErr)
+					return
+				}
+				if stuckCount == 0 {
+					logger.Info("Both chains synced, skipping auto-backfill (no stuck operations)")
+					return
+				}
 				logger.Info("Both chains synced, running backfill...")
 				n3Contracts, neoxContracts := bridgeContracts(cfg)
 				bf := indexer.NewBackfiller(rt.opStore, rt.neoxClient, rt.n3Client, neoxContracts, n3Contracts, logger)

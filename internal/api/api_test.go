@@ -30,7 +30,8 @@ func setup(t *testing.T) (*echo.Echo, *Handler, *datastore.OperationStore) {
 	opStore := datastore.NewOperationStore(store, nil)
 	pause := monitor.NewPauseDetector(store, slog.Default())
 	health := monitor.NewHealthAggregator(opStore, pause, slog.Default())
-	handler := NewHandler(store, opStore, health)
+	syncComputer := monitor.NewSyncComputer(datastore.NewBridgeStateStore(store), slog.Default())
+	handler := NewHandler(store, opStore, health, syncComputer)
 
 	e := echo.New()
 	RegisterRoutes(e, handler)
@@ -237,5 +238,22 @@ func TestGetOperationByNonce_MultipleResults(t *testing.T) {
 	}
 	if len(result) != 2 {
 		t.Fatalf("expected 2 operations, got %d", len(result))
+	}
+}
+
+func TestGetSyncInstances(t *testing.T) {
+	e, _, _ := setup(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/sync/instances", nil)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var result []types.DirectionalInstanceSync
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
 }

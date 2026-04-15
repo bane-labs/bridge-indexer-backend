@@ -16,6 +16,9 @@ import (
 	"github.com/bane-labs/bridge-indexer-backend/pkg/neox"
 )
 
+// version is set at link time via -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 // @title           Bridge Indexer API
 // @version         1.0
 // @description     API for monitoring cross-chain bridge operations between Neo N3 and NeoX.
@@ -25,9 +28,10 @@ import (
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "bridge-indexer",
-		Short: "Neo X <-> Neo N3 Bridge Indexer & Monitoring Backend",
-		RunE:  run,
+		Use:     "bridge-indexer",
+		Short:   "Neo X <-> Neo N3 Bridge Indexer & Monitoring Backend",
+		Version: version,
+		RunE:    run,
 	}
 
 	backfillCmd := &cobra.Command{
@@ -36,8 +40,12 @@ func main() {
 		RunE:  runBackfill,
 	}
 	statusCmd := newStatusCommand()
+	cacheValidateCmd := newCacheValidateCommand()
+	cacheFillN3Cmd := newCacheFillN3Command()
 	rootCmd.AddCommand(backfillCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(cacheValidateCmd)
+	rootCmd.AddCommand(cacheFillN3Cmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

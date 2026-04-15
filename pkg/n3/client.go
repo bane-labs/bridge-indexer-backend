@@ -2,6 +2,7 @@ package n3
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -9,20 +10,44 @@ import (
 	"time"
 
 	"github.com/nspcc-dev/neo-go/pkg/core/block"
+	neio "github.com/nspcc-dev/neo-go/pkg/io"
 	"github.com/nspcc-dev/neo-go/pkg/neorpc/result"
 	"github.com/nspcc-dev/neo-go/pkg/rpcclient"
 	"github.com/nspcc-dev/neo-go/pkg/util"
+
+	"github.com/bane-labs/bridge-indexer-backend/pkg/blockcache"
 )
+
+type pooledRPC struct {
+	client     *rpcclient.Client
+	lastCallNs atomic.Int64
+}
 
 // Client wraps a pool of Neo N3 RPC connections for concurrent use.
 type Client struct {
-	pool         []*rpcclient.Client
+	pool         []*pooledRPC
 	endpoints    []string
 	poolSize     int
 	counter      atomic.Uint64
 	logger       *slog.Logger
 	callInterval time.Duration
-	lastCallNs   atomic.Int64
+	cache        *blockcache.Cache
+	cacheReads   bool // true when the cache has data worth reading
+}
+
+// SetCache attaches an optional block cache. When set, GetBlockByIndex and
+// GetApplicationLog store RPC responses for future re-syncs. Cache reads are
+// only enabled if existing N3 data is detected (i.e. a previous run already
+// populated the cache). This avoids pointless BadgerDB lookups during the
+// initial sync where every Get would be a miss.
+func (c *Client) SetCache(cache *blockcache.Cache) {
+	c.cache = cache
+	if cache.HasPrefix([]byte("n3:")) {
+		c.cacheReads = true
+		c.logger.Info("N3 block cache: reads enabled (data found)")
+	} else {
+		c.logger.Info("N3 block cache: write-only (no existing data)")
+	}
 }
 
 // NewClient creates a Client with a pool of poolSize RPC connections,
@@ -46,7 +71,7 @@ func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *sl
 		callInterval: callInterval,
 	}
 
-	pool := make([]*rpcclient.Client, 0, poolSize)
+	pool := make([]*pooledRPC, 0, poolSize)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for i := 0; i < poolSize; i++ {
@@ -67,7 +92,7 @@ func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *sl
 			}
 			logger.Info("Pool connection established", "endpoint", ep, "poolIdx", i)
 			mu.Lock()
-			pool = append(pool, rpc)
+			pool = append(pool, &pooledRPC{client: rpc})
 			mu.Unlock()
 		}(i)
 	}
@@ -82,8 +107,8 @@ func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *sl
 	return c, nil
 }
 
-// pick returns the next connection from the pool using round-robin.
-func (c *Client) pick() *rpcclient.Client {
+// pick returns the next pooled connection using round-robin.
+func (c *Client) pick() *pooledRPC {
 	idx := c.counter.Add(1) % uint64(len(c.pool))
 	return c.pool[idx]
 }
@@ -96,11 +121,11 @@ func retry[T any](c *Client, ctx context.Context, op func(rpc *rpcclient.Client)
 	var zero T
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if err := c.waitForPacing(ctx); err != nil {
+		conn := c.pick()
+		if err := c.waitForPacing(ctx, conn); err != nil {
 			return zero, err
 		}
-		rpc := c.pick()
-		val, err := op(rpc)
+		val, err := op(conn.client)
 		if err == nil {
 			return val, nil
 		}
@@ -120,14 +145,14 @@ func retry[T any](c *Client, ctx context.Context, op func(rpc *rpcclient.Client)
 	return zero, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
 }
 
-func (c *Client) waitForPacing(ctx context.Context) error {
+func (c *Client) waitForPacing(ctx context.Context, conn *pooledRPC) error {
 	if c.callInterval <= 0 {
 		return nil
 	}
 	now := time.Now()
-	lastNs := c.lastCallNs.Load()
+	lastNs := conn.lastCallNs.Load()
 	if lastNs == 0 {
-		c.lastCallNs.CompareAndSwap(0, now.UnixNano())
+		conn.lastCallNs.CompareAndSwap(0, now.UnixNano())
 		return nil
 	}
 	last := time.Unix(0, lastNs)
@@ -141,7 +166,7 @@ func (c *Client) waitForPacing(ctx context.Context) error {
 		}
 		now = time.Now()
 	}
-	c.lastCallNs.Store(now.UnixNano())
+	conn.lastCallNs.Store(now.UnixNano())
 	return nil
 }
 
@@ -152,21 +177,73 @@ func (c *Client) GetBlockCount(ctx context.Context) (uint32, error) {
 }
 
 func (c *Client) GetBlockByIndex(ctx context.Context, index uint32) (*block.Block, error) {
-	return retry(c, ctx, func(rpc *rpcclient.Client) (*block.Block, error) {
+	if c.cacheReads {
+		key := n3BlockKey(index)
+		if data, ok := c.cache.Get(key); ok {
+			blk := block.New(false)
+			r := neio.NewBinReaderFromBuf(data)
+			blk.DecodeBinary(r)
+			if r.Err == nil {
+				return blk, nil
+			}
+		}
+	}
+
+	blk, err := retry(c, ctx, func(rpc *rpcclient.Client) (*block.Block, error) {
 		return rpc.GetBlockByIndex(index)
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	if c.cache != nil {
+		w := neio.NewBufBinWriter()
+		blk.EncodeBinary(w.BinWriter)
+		if w.Err == nil {
+			_ = c.cache.Put(n3BlockKey(index), w.Bytes())
+		}
+	}
+	return blk, nil
 }
 
 func (c *Client) GetApplicationLog(ctx context.Context, txHash util.Uint256) (*result.ApplicationLog, error) {
-	return retry(c, ctx, func(rpc *rpcclient.Client) (*result.ApplicationLog, error) {
+	if c.cacheReads {
+		key := n3AppLogKey(txHash)
+		if data, ok := c.cache.Get(key); ok {
+			var appLog result.ApplicationLog
+			if err := json.Unmarshal(data, &appLog); err == nil {
+				return &appLog, nil
+			}
+		}
+	}
+
+	appLog, err := retry(c, ctx, func(rpc *rpcclient.Client) (*result.ApplicationLog, error) {
 		return rpc.GetApplicationLog(txHash, nil)
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	if c.cache != nil {
+		if data, jErr := json.Marshal(appLog); jErr == nil {
+			_ = c.cache.Put(n3AppLogKey(txHash), data)
+		}
+	}
+	return appLog, nil
+}
+
+func n3BlockKey(height uint32) []byte {
+	return fmt.Appendf(nil, "n3:blk:%d", height)
+}
+
+func n3AppLogKey(txHash util.Uint256) []byte {
+	return fmt.Appendf(nil, "n3:applog:%s", txHash.StringLE())
 }
 
 func (c *Client) Close() {
 	for _, rpc := range c.pool {
-		if rpc != nil {
-			rpc.Close()
+		if rpc != nil && rpc.client != nil {
+			rpc.client.Close()
 		}
 	}
 }
@@ -174,4 +251,9 @@ func (c *Client) Close() {
 // CallInterval returns the configured interval between RPC calls.
 func (c *Client) CallInterval() time.Duration {
 	return c.callInterval
+}
+
+// PoolSize returns active pooled RPC connections.
+func (c *Client) PoolSize() int {
+	return len(c.pool)
 }

@@ -28,7 +28,8 @@ func setupIntegration(t *testing.T) (*echo.Echo, *datastore.Store, *datastore.Op
 	store, opStore := testutil.NewTestStore(t)
 	pause := monitor.NewPauseDetector(store, slog.Default())
 	health := monitor.NewHealthAggregator(opStore, pause, slog.Default())
-	handler := NewHandler(store, opStore, health)
+	syncComputer := monitor.NewSyncComputer(datastore.NewBridgeStateStore(store), slog.Default())
+	handler := NewHandler(store, opStore, health, syncComputer)
 
 	e := echo.New()
 	RegisterRoutes(e, handler)

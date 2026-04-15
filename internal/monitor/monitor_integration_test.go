@@ -77,7 +77,7 @@ func TestStuckDetector_WithRealOperations(t *testing.T) {
 		t.Fatalf("save old op2: %v", err)
 	}
 
-	detector := NewStuckDetector(opStore, &alerter.NoopAlerter{}, threshold, slog.Default())
+	detector := NewStuckDetector(opStore, &alerter.NoopAlerter{}, StuckThresholds{Default: threshold}, slog.Default())
 	if err := detector.Check(ctx); err != nil {
 		t.Fatalf("check: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,7 +69,7 @@ func (b *Backfiller) Run(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	deposits := make(map[uint64]*types.BridgeOperation)
+	deposits := make(map[withdrawalKey]*types.BridgeOperation)
 	withdrawals := make(map[withdrawalKey]*types.BridgeOperation)
 	totalStuck := len(ops)
 
@@ -79,9 +80,10 @@ func (b *Backfiller) Run(ctx context.Context) (int, error) {
 		op := &ops[i]
 		switch op.Direction {
 		case types.DirectionDeposit:
-			deposits[op.Nonce] = op
+			key := withdrawalKey{bridgeType: op.BridgeType, nonce: op.Nonce, destToken: normalizeDestTokenFromOp(op)}
+			deposits[key] = op
 		case types.DirectionWithdrawal:
-			key := withdrawalKey{bridgeType: op.BridgeType, nonce: op.Nonce}
+			key := withdrawalKey{bridgeType: op.BridgeType, nonce: op.Nonce, destToken: normalizeDestTokenFromOp(op)}
 			withdrawals[key] = op
 			height := uint32(op.SourceBlockHeight)
 			if !hasMinBlock || height < minBlock {
@@ -124,9 +126,10 @@ func (b *Backfiller) Run(ctx context.Context) (int, error) {
 type withdrawalKey struct {
 	bridgeType types.BridgeType
 	nonce      uint64
+	destToken  string
 }
 
-func (b *Backfiller) resolveDeposits(ctx context.Context, deposits map[uint64]*types.BridgeOperation) (int, error) {
+func (b *Backfiller) resolveDeposits(ctx context.Context, deposits map[withdrawalKey]*types.BridgeOperation) (int, error) {
 	addrs := make([]common.Address, len(b.neoxContracts))
 	for i, s := range b.neoxContracts {
 		addrs[i] = common.HexToAddress(s)
@@ -152,7 +155,7 @@ func (b *Backfiller) resolveDeposits(ctx context.Context, deposits map[uint64]*t
 	}
 
 	resolved := 0
-	resolvedNonces := make(map[uint64]struct{})
+	resolvedKeys := make(map[withdrawalKey]struct{})
 	headerTimes := make(map[uint64]time.Time)
 
 	// Scan in batches of neoxMaxBlockRange to avoid RPC limits.
@@ -180,16 +183,17 @@ func (b *Backfiller) resolveDeposits(ctx context.Context, deposits map[uint64]*t
 				continue
 			}
 
-			nonce, ok := extractNeoXNonce(log)
+			bt, nonce, destToken, ok := extractNeoXCompletionMatch(log)
 			if !ok {
 				continue
 			}
 
-			op, exists := deposits[nonce]
+			key := withdrawalKey{bridgeType: bt, nonce: nonce, destToken: destToken}
+			op, exists := deposits[key]
 			if !exists {
 				continue
 			}
-			if _, done := resolvedNonces[nonce]; done {
+			if _, done := resolvedKeys[key]; done {
 				continue
 			}
 
@@ -198,19 +202,34 @@ func (b *Backfiller) resolveDeposits(ctx context.Context, deposits map[uint64]*t
 				return resolved, err
 			}
 
-			err = b.opStore.UpdateOperationCompletion(
-				op.BridgeType,
-				op.Direction,
-				op.Nonce,
-				log.BlockNumber,
-				log.TxHash.Hex(),
-				blockTime,
-			)
+			if op.BridgeType == types.BridgeTypeToken {
+				destTok := ""
+				if op.DestTokenContract != nil {
+					destTok = *op.DestTokenContract
+				}
+				err = b.opStore.UpdateTokenOperationCompletionByDestToken(
+					op.Direction,
+					op.Nonce,
+					destTok,
+					log.BlockNumber,
+					log.TxHash.Hex(),
+					blockTime,
+				)
+			} else {
+				err = b.opStore.UpdateOperationCompletion(
+					op.BridgeType,
+					op.Direction,
+					op.Nonce,
+					log.BlockNumber,
+					log.TxHash.Hex(),
+					blockTime,
+				)
+			}
 			if err != nil {
-				return resolved, fmt.Errorf("update NeoX completion nonce %d: %w", nonce, err)
+				return resolved, fmt.Errorf("update NeoX completion %s nonce %d: %w", bt, nonce, err)
 			}
 
-			resolvedNonces[nonce] = struct{}{}
+			resolvedKeys[key] = struct{}{}
 			resolved++
 			b.logger.Info("Backfill resolved operation",
 				"bridge_type", op.BridgeType,
@@ -384,10 +403,22 @@ func (b *Backfiller) resolveWithdrawals(
 			continue
 		}
 		op := withdrawals[m.key]
-		err := b.opStore.UpdateOperationCompletion(
-			op.BridgeType, op.Direction, op.Nonce,
-			uint64(m.height), m.txHash, m.blkTime,
-		)
+		var err error
+		if op.BridgeType == types.BridgeTypeToken {
+			destTok := ""
+			if op.DestTokenContract != nil {
+				destTok = *op.DestTokenContract
+			}
+			err = b.opStore.UpdateTokenOperationCompletionByDestToken(
+				op.Direction, op.Nonce, destTok,
+				uint64(m.height), m.txHash, m.blkTime,
+			)
+		} else {
+			err = b.opStore.UpdateOperationCompletion(
+				op.BridgeType, op.Direction, op.Nonce,
+				uint64(m.height), m.txHash, m.blkTime,
+			)
+		}
 		if err != nil {
 			return int(resolved), fmt.Errorf("update N3 completion nonce %d: %w", op.Nonce, err)
 		}
@@ -403,26 +434,40 @@ func (b *Backfiller) resolveWithdrawals(
 	return int(resolved), nil
 }
 
-func extractNeoXNonce(log ethtypes.Log) (uint64, bool) {
+// extractNeoXCompletionMatch returns bridge type, nonce and destination token.
+func extractNeoXCompletionMatch(log ethtypes.Log) (types.BridgeType, uint64, string, bool) {
 	switch log.Topics[0] {
 	case sigNativeClaim, sigNativeClaimable, sigNativeDeposit:
 		if len(log.Topics) < 2 {
-			return 0, false
+			return "", 0, "", false
 		}
-		return new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64(), true
+		return types.BridgeTypeNative, new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64(), "", true
 	case sigTokenClaim, sigTokenClaimable, sigTokenDeposit:
 		if len(log.Topics) < 3 {
-			return 0, false
+			return "", 0, "", false
 		}
-		return new(big.Int).SetBytes(log.Topics[2].Bytes()).Uint64(), true
-	case sigExecution:
+		destToken := normalizeTokenID(common.BytesToAddress(log.Topics[1].Bytes()).Hex())
+		return types.BridgeTypeToken, new(big.Int).SetBytes(log.Topics[2].Bytes()).Uint64(), destToken, true
+	case sigExecution, sigNeoToEvmRootUpdate:
 		if len(log.Topics) < 2 {
-			return 0, false
+			return "", 0, "", false
 		}
-		return new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64(), true
+		return types.BridgeTypeMessage, new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64(), "", true
 	default:
-		return 0, false
+		return "", 0, "", false
 	}
+}
+
+// extractNeoXNonce returns just the nonce (kept for backward compatibility with tests).
+func extractNeoXNonce(log ethtypes.Log) (uint64, bool) {
+	_, nonce, _, ok := extractNeoXCompletionMatch(log)
+	return nonce, ok
+}
+
+// extractNeoXNonceAndType keeps backward-compatible test helper shape.
+func extractNeoXNonceAndType(log ethtypes.Log) (types.BridgeType, uint64, bool) {
+	bt, nonce, _, ok := extractNeoXCompletionMatch(log)
+	return bt, nonce, ok
 }
 
 func (b *Backfiller) neoxBlockTime(ctx context.Context, height uint64, cache map[uint64]time.Time) (time.Time, error) {
@@ -464,7 +509,11 @@ func extractN3WithdrawalKey(event state.NotificationEvent) (withdrawalKey, bool)
 		if err != nil {
 			return withdrawalKey{}, false
 		}
-		return withdrawalKey{bridgeType: types.BridgeTypeToken, nonce: nonce}, true
+		destToken, tokErr := itemToAddressString(items[0])
+		if tokErr != nil {
+			return withdrawalKey{}, false
+		}
+		return withdrawalKey{bridgeType: types.BridgeTypeToken, nonce: nonce, destToken: normalizeTokenID(destToken)}, true
 	case "Execution":
 		if len(items) < 1 {
 			return withdrawalKey{}, false
@@ -477,4 +526,20 @@ func extractN3WithdrawalKey(event state.NotificationEvent) (withdrawalKey, bool)
 	default:
 		return withdrawalKey{}, false
 	}
+}
+
+func normalizeDestTokenFromOp(op *types.BridgeOperation) string {
+	if op == nil || op.BridgeType != types.BridgeTypeToken || op.DestTokenContract == nil {
+		return ""
+	}
+	return normalizeTokenID(*op.DestTokenContract)
+}
+
+func normalizeTokenID(token string) string {
+	s := strings.TrimSpace(strings.ToLower(token))
+	s = strings.TrimPrefix(s, "0x")
+	if s == "" {
+		return "unknown"
+	}
+	return s
 }

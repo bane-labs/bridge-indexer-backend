@@ -35,6 +35,13 @@ type N3Indexer struct {
 	logger           *slog.Logger
 }
 
+type n3BlockResult struct {
+	height uint32
+	state  *types.IndexerState
+	ops    []*types.BridgeOperation
+	err    error
+}
+
 func NewN3Indexer(
 	client *n3.Client,
 	store *datastore.Store,
@@ -92,6 +99,11 @@ func (idx *N3Indexer) run(ctx context.Context, startHeight uint32) error {
 
 func (idx *N3Indexer) runSerial(ctx context.Context, startHeight uint32) error {
 	height := startHeight
+	workers := idx.blockWorkerCount()
+	batchSize := workers * 2
+	if batchSize < 1 {
+		batchSize = 1
+	}
 
 	for {
 		select {
@@ -133,22 +145,41 @@ func (idx *N3Indexer) runSerial(ctx context.Context, startHeight uint32) error {
 				}
 			}
 
-			if err := idx.processBlock(ctx, height); err != nil {
-				idx.logger.Error("Failed to process N3 block", "height", height, "error", err)
+			batchEnd := height
+			if workers > 1 {
+				nextEnd := height + uint32(batchSize) - 1
+				if nextEnd < batchEnd || nextEnd > chainHeight {
+					nextEnd = chainHeight
+				}
+				batchEnd = nextEnd
+			}
+
+			results, err := idx.processBlockBatchWithResult(ctx, height, batchEnd, workers)
+			if err != nil {
+				idx.logger.Error("Failed to process N3 block batch", "from", height, "to", batchEnd, "error", err)
 				time.Sleep(5 * time.Second)
 				break
 			}
 
-			if interval := idx.client.CallInterval(); interval > 0 {
-				select {
-				case <-time.After(interval):
-				case <-ctx.Done():
-					return nil
+			for _, r := range results {
+				if r.err != nil {
+					idx.logger.Error("Failed to process N3 block", "height", r.height, "error", r.err)
+					time.Sleep(5 * time.Second)
+					// Retry from failed height.
+					height = r.height
+					goto nextOuterTick
 				}
+				if err := idx.applyProcessedBlock(r.state, r.ops); err != nil {
+					idx.logger.Error("Failed to persist N3 block", "height", r.height, "error", err)
+					time.Sleep(5 * time.Second)
+					// Retry from failed height.
+					height = r.height
+					goto nextOuterTick
+				}
+				height = r.height + 1
 			}
-
-			height++
 		}
+	nextOuterTick:
 	}
 }
 
@@ -157,6 +188,10 @@ func (idx *N3Indexer) processBlock(ctx context.Context, height uint32) error {
 	if err != nil {
 		return err
 	}
+	return idx.applyProcessedBlock(state, ops)
+}
+
+func (idx *N3Indexer) applyProcessedBlock(state *types.IndexerState, ops []*types.BridgeOperation) error {
 	if len(ops) > 0 {
 		extraOps, bsErr := idx.buildBridgeStateWriteOps(ops)
 		if bsErr != nil {
@@ -177,6 +212,88 @@ func (idx *N3Indexer) processBlock(ctx context.Context, height uint32) error {
 		}
 	}
 	return nil
+}
+
+func (idx *N3Indexer) processBlockBatchWithResult(ctx context.Context, from, to uint32, workers int) ([]n3BlockResult, error) {
+	if to < from {
+		return nil, nil
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	total := int(to-from) + 1
+	results := make([]n3BlockResult, total)
+	jobs := make(chan uint32, total)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for h := range jobs {
+				state, ops, err := idx.processBlockWithResult(ctx, h)
+				results[int(h-from)] = n3BlockResult{
+					height: h,
+					state:  state,
+					ops:    ops,
+					err:    err,
+				}
+			}
+		}()
+	}
+
+	for h := from; h <= to; h++ {
+		select {
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return nil, ctx.Err()
+		case jobs <- h:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	return results, nil
+}
+
+func (idx *N3Indexer) blockWorkerCount() int {
+	// Conservative parallelism across blocks; per-block processing is already parallel.
+	// Scale with available RPC pool to utilize multiple endpoints.
+	workers := 1
+	switch {
+	case idx.concurrency >= 120:
+		workers = 6
+	case idx.concurrency >= 80:
+		workers = 5
+	case idx.concurrency >= 40:
+		workers = 4
+	case idx.concurrency >= 20:
+		workers = 3
+	case idx.concurrency >= 10:
+		workers = 2
+	}
+	if idx.client != nil {
+		switch ps := idx.client.PoolSize(); {
+		case ps >= 56: // ~7 endpoints x 8 conns
+			if workers < 8 {
+				workers = 8
+			}
+		case ps >= 35:
+			if workers < 6 {
+				workers = 6
+			}
+		case ps >= 14:
+			if workers < 4 {
+				workers = 4
+			}
+		case ps >= 7:
+			if workers < 3 {
+				workers = 3
+			}
+		}
+	}
+	return workers
 }
 
 func (idx *N3Indexer) processBlockWithResult(ctx context.Context, height uint32) (*types.IndexerState, []*types.BridgeOperation, error) {

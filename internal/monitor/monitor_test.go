@@ -44,7 +44,7 @@ func TestStuckDetector_MarksStuck(t *testing.T) {
 	}
 	_ = opStore.SaveOperation(op)
 
-	detector := NewStuckDetector(opStore, &alerter.NoopAlerter{}, 5*time.Minute, slog.Default())
+	detector := NewStuckDetector(opStore, &alerter.NoopAlerter{}, StuckThresholds{Default: 5 * time.Minute}, slog.Default())
 	if err := detector.Check(context.Background()); err != nil {
 		t.Fatalf("check: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestStuckDetector_KeepsPending(t *testing.T) {
 	}
 	_ = opStore.SaveOperation(op)
 
-	detector := NewStuckDetector(opStore, &alerter.NoopAlerter{}, 5*time.Minute, slog.Default())
+	detector := NewStuckDetector(opStore, &alerter.NoopAlerter{}, StuckThresholds{Default: 5 * time.Minute}, slog.Default())
 	if err := detector.Check(context.Background()); err != nil {
 		t.Fatalf("check: %v", err)
 	}
@@ -81,6 +81,94 @@ func TestStuckDetector_KeepsPending(t *testing.T) {
 	got, _ := opStore.GetOperation(types.BridgeTypeNative, types.DirectionDeposit, 2)
 	if got.Status != types.StatusPending {
 		t.Fatalf("expected pending, got %s", got.Status)
+	}
+}
+
+func TestStuckDetector_MessageExecutableUsesLongerThreshold(t *testing.T) {
+	_, opStore := newTestStore(t)
+	ex := types.AMBMessageTypeExecutable
+	op := &types.BridgeOperation{
+		BridgeType:        types.BridgeTypeMessage,
+		Direction:         types.DirectionWithdrawal,
+		Nonce:             5,
+		SourceChain:       "neo_x",
+		DestinationChain:  "neo_n3",
+		SourceBlockHeight: 100,
+		SourceTxHash:      "0xtx",
+		FromAddress:       "0xs",
+		ToAddress:         "",
+		Timestamp:         time.Now().Add(-6 * time.Minute),
+		Status:            types.StatusPending,
+		AMBMessageType:    &ex,
+	}
+	_ = opStore.SaveOperation(op)
+
+	detector := NewStuckDetector(opStore, &alerter.NoopAlerter{}, StuckThresholds{Default: 5 * time.Minute, Message: 24 * time.Hour}, slog.Default())
+	if err := detector.Check(context.Background()); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	got, _ := opStore.GetOperation(types.BridgeTypeMessage, types.DirectionWithdrawal, 5)
+	if got.Status != types.StatusPending {
+		t.Fatalf("expected still pending (message threshold 24h), got %s", got.Status)
+	}
+}
+
+func TestStuckDetector_NativeUsesCustomThreshold(t *testing.T) {
+	_, opStore := newTestStore(t)
+	op := &types.BridgeOperation{
+		BridgeType:        types.BridgeTypeNative,
+		Direction:         types.DirectionDeposit,
+		Nonce:             3,
+		SourceChain:       "neo_n3",
+		DestinationChain:  "neo_x",
+		SourceBlockHeight: 100,
+		SourceTxHash:      "0xtx",
+		FromAddress:       "from",
+		ToAddress:         "to",
+		Timestamp:         time.Now().Add(-15 * time.Minute),
+		Status:            types.StatusPending,
+	}
+	_ = opStore.SaveOperation(op)
+
+	detector := NewStuckDetector(opStore, &alerter.NoopAlerter{}, StuckThresholds{
+		Default: 5 * time.Minute,
+		Native:  30 * time.Minute,
+	}, slog.Default())
+	if err := detector.Check(context.Background()); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	got, _ := opStore.GetOperation(types.BridgeTypeNative, types.DirectionDeposit, 3)
+	if got.Status != types.StatusPending {
+		t.Fatalf("expected pending (native threshold 30m), got %s", got.Status)
+	}
+}
+
+func TestStuckDetector_SkipsMessageStoreOnlyPending(t *testing.T) {
+	_, opStore := newTestStore(t)
+	so := types.AMBMessageTypeStoreOnly
+	op := &types.BridgeOperation{
+		BridgeType:        types.BridgeTypeMessage,
+		Direction:         types.DirectionWithdrawal,
+		Nonce:             1,
+		SourceChain:       "neo_x",
+		DestinationChain:  "neo_n3",
+		SourceBlockHeight: 100,
+		SourceTxHash:      "0xtx",
+		FromAddress:       "0xs",
+		ToAddress:         "",
+		Timestamp:         time.Now().Add(-48 * time.Hour),
+		Status:            types.StatusPending,
+		AMBMessageType:    &so,
+	}
+	_ = opStore.SaveOperation(op)
+
+	detector := NewStuckDetector(opStore, &alerter.NoopAlerter{}, StuckThresholds{Default: 5 * time.Minute, Message: 24 * time.Hour}, slog.Default())
+	if err := detector.Check(context.Background()); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	got, _ := opStore.GetOperation(types.BridgeTypeMessage, types.DirectionWithdrawal, 1)
+	if got.Status != types.StatusPending {
+		t.Fatalf("store_only should not be marked stuck, got %s", got.Status)
 	}
 }
 

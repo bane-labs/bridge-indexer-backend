@@ -72,6 +72,7 @@ func TestLoadConfig_AllFields(t *testing.T) {
 	t.Setenv("NEOX_MESSAGE_BRIDGE", "0xdef456")
 	t.Setenv("N3_NEOX_BRIDGE", "0x111222")
 	t.Setenv("N3_MESSAGE_BRIDGE", "0x333444")
+	t.Setenv("AUTO_BACKFILL_ENABLED", "true")
 
 	cfg, err := Load(newViper())
 	if err != nil {
@@ -136,6 +137,9 @@ func TestLoadConfig_AllFields(t *testing.T) {
 	if cfg.N3MessageBridge != "0x333444" {
 		t.Errorf("N3MessageBridge = %q, want 0x333444", cfg.N3MessageBridge)
 	}
+	if !cfg.AutoBackfillEnabled {
+		t.Error("AutoBackfillEnabled = false, want true")
+	}
 }
 
 func TestValidate_MissingRequiredFields(t *testing.T) {
@@ -180,6 +184,15 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if cfg.StuckThreshold != 5*time.Minute {
 		t.Errorf("StuckThreshold = %v, want 5m0s", cfg.StuckThreshold)
 	}
+	if cfg.StuckThresholdMessage != 24*time.Hour {
+		t.Errorf("StuckThresholdMessage = %v, want 24h (default STUCK_THRESHOLD_MESSAGE_MINUTES)", cfg.StuckThresholdMessage)
+	}
+	if cfg.StuckThresholdNative != 0 {
+		t.Errorf("StuckThresholdNative = %v, want 0 (use default STUCK_THRESHOLD)", cfg.StuckThresholdNative)
+	}
+	if cfg.StuckThresholdToken != 0 {
+		t.Errorf("StuckThresholdToken = %v, want 0 (use default STUCK_THRESHOLD)", cfg.StuckThresholdToken)
+	}
 	if len(cfg.CORSAllowedOrigins) != 0 {
 		t.Errorf("CORSAllowedOrigins length = %d, want 0", len(cfg.CORSAllowedOrigins))
 	}
@@ -209,6 +222,9 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	}
 	if cfg.DiscordWebhookURL != "" {
 		t.Errorf("DiscordWebhookURL = %q, want empty", cfg.DiscordWebhookURL)
+	}
+	if cfg.AutoBackfillEnabled {
+		t.Error("AutoBackfillEnabled = true, want false by default")
 	}
 	if cfg.SMTPHost != "" {
 		t.Errorf("SMTPHost = %q, want empty", cfg.SMTPHost)
