@@ -261,14 +261,15 @@ func messageNeoXWithdrawalCompletedNeedsSourceState(op *types.BridgeOperation) b
 // for a set of pending operations. Only writes to bridge_src keys, never touching bridge_dst.
 // Completed NeoX MessageSend ops that are STORE_ONLY or RESULT also update source state
 // (they never become pending; source nonce still advances on NeoX).
+// For those same STORE_ONLY/RESULT ops, the dest state is also advanced to the same nonce
+// so the bridge instance appears synced (no N3 execution is expected or needed).
 func (bs *BridgeStateStore) BuildSourceStateWriteOps(ops []*types.BridgeOperation) ([]WriteOp, error) {
 	var writeOps []WriteOp
 	ensured := make(map[string]bool)
 	for _, op := range ops {
-		if op.Status != types.StatusPending {
-			if !messageNeoXWithdrawalCompletedNeedsSourceState(op) {
-				continue
-			}
+		skipsDest := messageNeoXWithdrawalCompletedNeedsSourceState(op)
+		if op.Status != types.StatusPending && !skipsDest {
+			continue
 		}
 		instanceID := InstanceIDFromOperation(op)
 		if !ensured[instanceID] {
@@ -293,16 +294,29 @@ func (bs *BridgeStateStore) BuildSourceStateWriteOps(ops []*types.BridgeOperatio
 		next := BuildSourceChainState(op)
 		var current types.ChainState
 		if err := bs.store.Get(bridgeSrcPrefix+instanceID, &current); err == nil {
-			if !shouldReplaceChainState(&current, next) {
-				continue
+			if shouldReplaceChainState(&current, next) {
+				writeOps = append(writeOps, WriteOp{Key: bridgeSrcPrefix + instanceID, Value: next})
 			}
-		} else if err != ErrNotFound {
+		} else if err == ErrNotFound {
+			writeOps = append(writeOps, WriteOp{Key: bridgeSrcPrefix + instanceID, Value: next})
+		} else {
 			return nil, fmt.Errorf("get source chain state %s: %w", instanceID, err)
 		}
-		writeOps = append(writeOps, WriteOp{
-			Key:   bridgeSrcPrefix + instanceID,
-			Value: next,
-		})
+		// STORE_ONLY/RESULT NeoX withdrawals never get N3 execution. Advance the
+		// destination state to the same nonce so the sync computer reports synced.
+		if skipsDest {
+			nextDst := BuildDestChainState(op.Nonce, op.SourceBlockHeight, op.SourceTxHash, op.Timestamp, op.Root)
+			var currentDst types.ChainState
+			if err := bs.store.Get(bridgeDstPrefix+instanceID, &currentDst); err == nil {
+				if shouldReplaceChainState(&currentDst, nextDst) {
+					writeOps = append(writeOps, WriteOp{Key: bridgeDstPrefix + instanceID, Value: nextDst})
+				}
+			} else if err == ErrNotFound {
+				writeOps = append(writeOps, WriteOp{Key: bridgeDstPrefix + instanceID, Value: nextDst})
+			} else {
+				return nil, fmt.Errorf("get dest chain state %s: %w", instanceID, err)
+			}
+		}
 	}
 	return writeOps, nil
 }
@@ -409,7 +423,11 @@ func (bs *BridgeStateStore) RebuildFromOperations(logger *slog.Logger) error {
 			agg.maxSrcOp = &opCopy
 		}
 
-		if op.Status == types.StatusCompleted && op.DestBlockHeight != nil && op.DestTxHash != nil {
+		// STORE_ONLY/RESULT NeoX withdrawals are completed without a dest tx.
+		// Include them as valid dest-state candidates so the rebuild reflects
+		// that those nonces were fully processed.
+		isSkipsDest := op.Status == types.StatusCompleted && messageNeoXWithdrawalCompletedNeedsSourceState(&op)
+		if op.Status == types.StatusCompleted && (op.DestTxHash != nil || isSkipsDest) {
 			if agg.maxDstOp == nil || op.Nonce > agg.maxDstOp.Nonce {
 				opCopy := op
 				agg.maxDstOp = &opCopy
@@ -451,10 +469,19 @@ func (bs *BridgeStateStore) RebuildFromOperations(logger *slog.Logger) error {
 			if agg.maxDstOp.CompletionTimestamp != nil {
 				ct = *agg.maxDstOp.CompletionTimestamp
 			}
+			// For STORE_ONLY/RESULT ops there is no dest block/tx; fall back to source.
+			destBlock := agg.maxDstOp.SourceBlockHeight
+			if agg.maxDstOp.DestBlockHeight != nil {
+				destBlock = *agg.maxDstOp.DestBlockHeight
+			}
+			destTxHash := agg.maxDstOp.SourceTxHash
+			if agg.maxDstOp.DestTxHash != nil {
+				destTxHash = *agg.maxDstOp.DestTxHash
+			}
 			state.DestState = BuildDestChainState(
 				agg.maxDstOp.Nonce,
-				*agg.maxDstOp.DestBlockHeight,
-				*agg.maxDstOp.DestTxHash,
+				destBlock,
+				destTxHash,
 				ct,
 				agg.maxDstOp.Root,
 			)
