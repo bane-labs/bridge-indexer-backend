@@ -63,7 +63,10 @@ func (d *StuckDetector) Check(ctx context.Context) error {
 
 	now := time.Now()
 	for _, op := range ops {
-		if op.BridgeType == types.BridgeTypeMessage && types.MessageAMBTypeSkipsNeoXWithdrawalDest(op.AMBMessageType) {
+		// Message bridge withdrawals (NeoX→N3) are executable by the recipient at
+		// their discretion. Never executing is a valid user choice and does not
+		// indicate a bridge failure, so skip stuck detection for this direction.
+		if op.BridgeType == types.BridgeTypeMessage && op.Direction == types.DirectionWithdrawal {
 			continue
 		}
 		limit := d.thresholds.ForBridgeType(op.BridgeType)
