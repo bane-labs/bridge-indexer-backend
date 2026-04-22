@@ -210,7 +210,7 @@ func TestHealthAggregator_Healthy(t *testing.T) {
 	}
 }
 
-func TestHealthAggregator_Degraded(t *testing.T) {
+func TestHealthAggregator_StuckDoesNotAffectStatus(t *testing.T) {
 	store, opStore := newTestStore(t)
 	pd := NewPauseDetector(store, slog.Default())
 	ha := NewHealthAggregator(opStore, pd, slog.Default())
@@ -245,8 +245,8 @@ func TestHealthAggregator_Degraded(t *testing.T) {
 	for _, b := range health.Bridges {
 		if b.BridgeType == types.BridgeTypeNative {
 			found = true
-			if b.Status != types.HealthStatusUnhealthy {
-				t.Fatalf("expected unhealthy (50%% stuck), got %s", b.Status)
+			if b.Status != types.HealthStatusHealthy {
+				t.Fatalf("expected healthy (stuck ops do not degrade health), got %s", b.Status)
 			}
 			if b.StuckOperations != 1 {
 				t.Fatalf("expected 1 stuck, got %d", b.StuckOperations)

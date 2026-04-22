@@ -172,9 +172,9 @@ func (h *HealthAggregator) computeBridgeHealth(bt types.BridgeType) (types.Bridg
 
 	status := types.HealthStatusHealthy
 	total := completedCount + stuckCount
+	// Stuck operations are indexed for operators but do not imply bridge health;
+	// only on-chain pause flags affect status (PD §6).
 	if bt == types.BridgeTypeMessage {
-		// Message bridge withdrawals are user-executed; stuck withdrawal ops don't
-		// reflect bridge infrastructure failures. Only pause state determines health.
 		if depPaused && wdPaused {
 			status = types.HealthStatusUnhealthy
 		} else if depPaused || wdPaused {
@@ -183,9 +183,7 @@ func (h *HealthAggregator) computeBridgeHealth(bt types.BridgeType) (types.Bridg
 	} else {
 		if depPaused && wdPaused {
 			status = types.HealthStatusUnhealthy
-		} else if total > 0 && float64(stuckCount)/float64(total) >= 0.5 {
-			status = types.HealthStatusUnhealthy
-		} else if stuckCount > 0 || depPaused || wdPaused {
+		} else if depPaused || wdPaused {
 			status = types.HealthStatusDegraded
 		}
 	}

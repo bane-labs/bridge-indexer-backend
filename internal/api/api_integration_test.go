@@ -128,7 +128,7 @@ func TestAPI_HealthEndpoint(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	// With a stuck operation, overall status should not be healthy.
+	// Stuck operations in the DB are reflected per-bridge but do not set degraded/unhealthy.
 	if result.Status == "" {
 		t.Fatal("expected non-empty status")
 	}

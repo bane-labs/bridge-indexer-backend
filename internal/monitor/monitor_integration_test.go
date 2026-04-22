@@ -202,13 +202,13 @@ func TestHealthAggregator_WithRealOperations(t *testing.T) {
 		bridgeMap[b.BridgeType] = b
 	}
 
-	// Native has 1 completed + 1 stuck → 50% stuck → unhealthy
+	// Native has 1 completed + 1 stuck; status stays healthy (stuck is informational).
 	native, ok := bridgeMap[types.BridgeTypeNative]
 	if !ok {
 		t.Fatal("native bridge not found in health")
 	}
-	if native.Status != types.HealthStatusUnhealthy {
-		t.Errorf("expected native unhealthy (50%% stuck), got %s", native.Status)
+	if native.Status != types.HealthStatusHealthy {
+		t.Errorf("expected native healthy, got %s", native.Status)
 	}
 	if native.StuckOperations != 1 {
 		t.Errorf("expected 1 stuck native op, got %d", native.StuckOperations)
@@ -232,9 +232,8 @@ func TestHealthAggregator_WithRealOperations(t *testing.T) {
 		t.Errorf("expected message healthy, got %s", msg.Status)
 	}
 
-	// Overall status should be unhealthy (worst of all bridges)
-	if health.Status != types.HealthStatusUnhealthy {
-		t.Errorf("expected overall unhealthy, got %s", health.Status)
+	if health.Status != types.HealthStatusHealthy {
+		t.Errorf("expected overall healthy, got %s", health.Status)
 	}
 }
 
