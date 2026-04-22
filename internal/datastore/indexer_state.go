@@ -48,7 +48,7 @@ func (s *Store) SaveIndexerStateWithOperations(state *types.IndexerState, ops []
 			return err
 		}
 		opKey := operationKeyForOp(normalizedOp)
-		if normalizedOp.Status == types.StatusPending && s.operationAlreadyAdvanced(opKey) {
+		if normalizedOp.Status == types.StatusRelayed && s.operationAlreadyAdvanced(opKey) {
 			continue
 		}
 		idxKey := statusIndexKeyForOp(normalizedOp.Status, normalizedOp)
@@ -81,7 +81,7 @@ func (s *Store) SaveIndexerStateWithOperationsAndExtra(state *types.IndexerState
 			return err
 		}
 		opKey := operationKeyForOp(normalizedOp)
-		if normalizedOp.Status == types.StatusPending && s.operationAlreadyAdvanced(opKey) {
+		if normalizedOp.Status == types.StatusRelayed && s.operationAlreadyAdvanced(opKey) {
 			continue
 		}
 		idxKey := statusIndexKeyForOp(normalizedOp.Status, normalizedOp)
@@ -108,7 +108,7 @@ func (s *Store) operationAlreadyAdvanced(opKey string) bool {
 }
 
 func (s *Store) reconcileDeferredCompletion(op *types.BridgeOperation, writeOps *[]WriteOp) (*types.BridgeOperation, error) {
-	if op.Status != types.StatusPending {
+	if op.Status != types.StatusRelayed {
 		return op, nil
 	}
 

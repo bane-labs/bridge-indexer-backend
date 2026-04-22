@@ -35,7 +35,7 @@ func TestStuckDetector_WithRealOperations(t *testing.T) {
 		FromAddress:       "NAddr1",
 		ToAddress:         "0xAddr1",
 		Timestamp:         time.Now().Add(-10 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	if err := opStore.SaveOperation(oldOp); err != nil {
 		t.Fatalf("save old op: %v", err)
@@ -53,7 +53,7 @@ func TestStuckDetector_WithRealOperations(t *testing.T) {
 		FromAddress:       "0xAddr2",
 		ToAddress:         "NAddr2",
 		Timestamp:         time.Now().Add(-1 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	if err := opStore.SaveOperation(recentOp); err != nil {
 		t.Fatalf("save recent op: %v", err)
@@ -71,7 +71,7 @@ func TestStuckDetector_WithRealOperations(t *testing.T) {
 		FromAddress:       "NAddr3",
 		ToAddress:         "0xAddr3",
 		Timestamp:         time.Now().Add(-15 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	if err := opStore.SaveOperation(oldOp2); err != nil {
 		t.Fatalf("save old op2: %v", err)
@@ -96,7 +96,7 @@ func TestStuckDetector_WithRealOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get recent op: %v", err)
 	}
-	if got2.Status != types.StatusPending {
+	if got2.Status != types.StatusRelayed {
 		t.Errorf("expected recent token op pending, got %s", got2.Status)
 	}
 

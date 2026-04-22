@@ -261,7 +261,7 @@ func TestBridgeStateStore_RebuildFromOperations(t *testing.T) {
 		BridgeType: types.BridgeTypeNative, Direction: types.DirectionDeposit, Nonce: 10,
 		SourceChain: "neo_n3", DestinationChain: "neo_x",
 		SourceBlockHeight: 100, SourceTxHash: "0xsrc10",
-		FromAddress: "a", ToAddress: "b", Timestamp: now, Status: types.StatusPending,
+		FromAddress: "a", ToAddress: "b", Timestamp: now, Status: types.StatusRelayed,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestBridgeStateStore_RebuildPreservesHigherExistingState(t *testing.T) {
 		BridgeType: types.BridgeTypeNative, Direction: types.DirectionDeposit, Nonce: 10,
 		SourceChain: "neo_n3", DestinationChain: "neo_x",
 		SourceBlockHeight: 100, SourceTxHash: "0xsrc10",
-		FromAddress: "a", ToAddress: "b", Timestamp: time.Now(), Status: types.StatusPending,
+		FromAddress: "a", ToAddress: "b", Timestamp: time.Now(), Status: types.StatusRelayed,
 	}); err != nil {
 		t.Fatal(err)
 	}

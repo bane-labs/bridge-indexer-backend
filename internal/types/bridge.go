@@ -23,9 +23,19 @@ const (
 type OperationStatus string
 
 const (
-	StatusPending   OperationStatus = "pending"
+	StatusRelayed   OperationStatus = "relayed"
 	StatusCompleted OperationStatus = "completed"
 	StatusStuck     OperationStatus = "stuck"
+)
+
+// SettlementStatus describes the settlement action required for a relayed operation.
+type SettlementStatus string
+
+const (
+	// SettlementStatusClaimable applies to relayed native and token bridge operations.
+	SettlementStatusClaimable SettlementStatus = "claimable"
+	// SettlementStatusWaitingForExecution applies to relayed message bridge operations.
+	SettlementStatusWaitingForExecution SettlementStatus = "waiting for execution"
 )
 
 // AMB message kinds from NeoX MessageSend encodedMetadata (AMBTypes.MessageType).
@@ -52,24 +62,25 @@ func MessageAMBTypeSkipsNeoXWithdrawalDest(t *string) bool {
 // BridgeOperation represents a single bridge operation with all 15 PD §4.2
 // indexed fields plus Status.
 type BridgeOperation struct {
-	BridgeType          BridgeType      `json:"bridge_type"`
-	Direction           Direction       `json:"direction"`
-	Nonce               uint64          `json:"nonce"`
-	SourceChain         string          `json:"source_chain"`      // "neo_n3" or "neo_x"
-	DestinationChain    string          `json:"destination_chain"` // "neo_n3" or "neo_x"
-	SourceBlockHeight   uint64          `json:"source_block_height"`
-	DestBlockHeight     *uint64         `json:"dest_block_height,omitempty"`
-	SourceTxHash        string          `json:"source_tx_hash"`
-	DestTxHash          *string         `json:"dest_tx_hash,omitempty"`
-	TokenContract       *string         `json:"token_contract,omitempty"`      // source chain token; nil for native bridge
-	DestTokenContract   *string         `json:"dest_token_contract,omitempty"` // destination chain token; nil for native bridge
-	Root                *string         `json:"root,omitempty"`                // deposit/withdrawal root hash from event
-	Amount              *string         `json:"amount,omitempty"`              // string to avoid big.Int JSON issues
-	FromAddress         string          `json:"from_address"`
-	ToAddress           string          `json:"to_address"`
-	Timestamp           time.Time       `json:"timestamp"`                      // source event time
-	CompletionTimestamp *time.Time      `json:"completion_timestamp,omitempty"` // destination event time
-	Status              OperationStatus `json:"status"`
+	BridgeType          BridgeType        `json:"bridge_type"`
+	Direction           Direction         `json:"direction"`
+	Nonce               uint64            `json:"nonce"`
+	SourceChain         string            `json:"source_chain"`      // "neo_n3" or "neo_x"
+	DestinationChain    string            `json:"destination_chain"` // "neo_n3" or "neo_x"
+	SourceBlockHeight   uint64            `json:"source_block_height"`
+	DestBlockHeight     *uint64           `json:"dest_block_height,omitempty"`
+	SourceTxHash        string            `json:"source_tx_hash"`
+	DestTxHash          *string           `json:"dest_tx_hash,omitempty"`
+	TokenContract       *string           `json:"token_contract,omitempty"`      // source chain token; nil for native bridge
+	DestTokenContract   *string           `json:"dest_token_contract,omitempty"` // destination chain token; nil for native bridge
+	Root                *string           `json:"root,omitempty"`                // deposit/withdrawal root hash from event
+	Amount              *string           `json:"amount,omitempty"`              // string to avoid big.Int JSON issues
+	FromAddress         string            `json:"from_address"`
+	ToAddress           string            `json:"to_address"`
+	Timestamp           time.Time         `json:"timestamp"`                      // source event time
+	CompletionTimestamp *time.Time        `json:"completion_timestamp,omitempty"` // destination event time
+	Status              OperationStatus   `json:"status"`
+	SettlementStatus    *SettlementStatus `json:"settlement_status,omitempty"`
 	// AMBMessageType is set for NeoX MessageSend events (executable | store_only | result).
 	// Omitted when unknown or for non-message operations.
 	AMBMessageType *string `json:"amb_message_type,omitempty"`

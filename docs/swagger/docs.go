@@ -150,7 +150,7 @@ const docTemplate = `{
                     },
                     {
                         "enum": [
-                            "pending",
+                            "relayed",
                             "completed",
                             "stuck"
                         ],
@@ -347,6 +347,9 @@ const docTemplate = `{
                 "status": {
                     "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.OperationStatus"
                 },
+                "settlement_status": {
+                    "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.SettlementStatus"
+                },
                 "timestamp": {
                     "description": "source event time",
                     "type": "string"
@@ -531,14 +534,25 @@ const docTemplate = `{
         "github_com_bane-labs_bridge-indexer-backend_internal_types.OperationStatus": {
             "type": "string",
             "enum": [
-                "pending",
+                "relayed",
                 "completed",
                 "stuck"
             ],
             "x-enum-varnames": [
-                "StatusPending",
+                "StatusRelayed",
                 "StatusCompleted",
                 "StatusStuck"
+            ]
+        },
+        "github_com_bane-labs_bridge-indexer-backend_internal_types.SettlementStatus": {
+            "type": "string",
+            "enum": [
+                "claimable",
+                "waiting for execution"
+            ],
+            "x-enum-varnames": [
+                "SettlementStatusClaimable",
+                "SettlementStatusWaitingForExecution"
             ]
         },
         "github_com_bane-labs_bridge-indexer-backend_internal_types.OverallHealth": {

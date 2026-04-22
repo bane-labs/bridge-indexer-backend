@@ -268,7 +268,7 @@ func (bs *BridgeStateStore) BuildSourceStateWriteOps(ops []*types.BridgeOperatio
 	ensured := make(map[string]bool)
 	for _, op := range ops {
 		skipsDest := messageNeoXWithdrawalCompletedNeedsSourceState(op)
-		if op.Status != types.StatusPending && !skipsDest {
+		if op.Status != types.StatusRelayed && !skipsDest {
 			continue
 		}
 		instanceID := InstanceIDFromOperation(op)

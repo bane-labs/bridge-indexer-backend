@@ -19,7 +19,7 @@ func sampleOp() *types.BridgeOperation {
 		FromAddress:       "NAddr1",
 		ToAddress:         "0xAddr2",
 		Timestamp:         time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 }
 
@@ -36,7 +36,7 @@ func TestOperationStore_SaveAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.Nonce != 42 || got.Status != types.StatusPending {
+	if got.Nonce != 42 || got.Status != types.StatusRelayed {
 		t.Fatalf("unexpected: nonce=%d status=%s", got.Nonce, got.Status)
 	}
 }
@@ -96,13 +96,13 @@ func TestOperationStore_ListByStatus(t *testing.T) {
 	op3.Nonce = 3
 	_ = os.SaveOperation(op3)
 
-	pending := types.StatusPending
-	results, total, err := os.ListOperations(OperationFilter{Status: &pending})
+	relayed := types.StatusRelayed
+	results, total, err := os.ListOperations(OperationFilter{Status: &relayed})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if total != 2 {
-		t.Fatalf("expected 2 pending, got %d", total)
+		t.Fatalf("expected 2 relayed, got %d", total)
 	}
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -180,8 +180,8 @@ func TestOperationStore_DeleteOperation(t *testing.T) {
 	}
 
 	// Status index should also be gone
-	pending := types.StatusPending
-	results, _, _ := os.ListOperations(OperationFilter{Status: &pending})
+	relayed := types.StatusRelayed
+	results, _, _ := os.ListOperations(OperationFilter{Status: &relayed})
 	if len(results) != 0 {
 		t.Fatalf("expected 0 after delete, got %d", len(results))
 	}

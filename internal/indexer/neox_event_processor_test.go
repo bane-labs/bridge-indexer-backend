@@ -108,8 +108,8 @@ func TestNeoX_NativeWithdrawal(t *testing.T) {
 	if op.Nonce != 77 {
 		t.Fatalf("expected nonce 77, got %d", op.Nonce)
 	}
-	if op.Status != types.StatusPending {
-		t.Fatalf("expected pending, got %s", op.Status)
+	if op.Status != types.StatusRelayed {
+		t.Fatalf("expected relayed, got %s", op.Status)
 	}
 }
 
@@ -193,8 +193,8 @@ func TestNeoX_MessageSend(t *testing.T) {
 	if op.AMBMessageType == nil || *op.AMBMessageType != types.AMBMessageTypeExecutable {
 		t.Fatalf("expected executable amb type, got %v", op.AMBMessageType)
 	}
-	if op.Status != types.StatusPending {
-		t.Fatalf("expected pending executable, got %s", op.Status)
+	if op.Status != types.StatusRelayed {
+		t.Fatalf("expected relayed executable, got %s", op.Status)
 	}
 }
 
@@ -238,7 +238,7 @@ func TestNeoX_NativeDepositComplete(t *testing.T) {
 		FromAddress:       "NFrom",
 		ToAddress:         "0xTo",
 		Timestamp:         time.Now().Add(-3 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	if err := opStore.SaveOperation(pendingOp); err != nil {
 		t.Fatalf("save: %v", err)
@@ -285,7 +285,7 @@ func TestNeoX_NeoToEvmRootUpdateCompletesMessageDeposit(t *testing.T) {
 		FromAddress:       "NFrom",
 		ToAddress:         "",
 		Timestamp:         time.Now().Add(-2 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	if err := opStore.SaveOperation(pendingOp); err != nil {
 		t.Fatalf("save: %v", err)

@@ -213,10 +213,10 @@ func renderStatusSnapshot(
 	fmt.Println()
 	fmt.Println("Operations By Bridge")
 	w = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "BRIDGE\tPENDING\tCOMPLETED\tSTUCK\tTOTAL")
-	totalPending, totalCompleted, totalStuck := 0, 0, 0
+	fmt.Fprintln(w, "BRIDGE\tRELAYED\tCOMPLETED\tSTUCK\tTOTAL")
+	totalRelayed, totalCompleted, totalStuck := 0, 0, 0
 	for _, bt := range []types.BridgeType{types.BridgeTypeNative, types.BridgeTypeToken, types.BridgeTypeMessage} {
-		p, pErr := apiClient.getOperationCount(ctx, bt, types.StatusPending)
+		p, pErr := apiClient.getOperationCount(ctx, bt, types.StatusRelayed)
 		c, cErr := apiClient.getOperationCount(ctx, bt, types.StatusCompleted)
 		s, sErr := apiClient.getOperationCount(ctx, bt, types.StatusStuck)
 		if pErr != nil || cErr != nil || sErr != nil {
@@ -225,11 +225,11 @@ func renderStatusSnapshot(
 			continue
 		}
 		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\n", bt, p, c, s, p+c+s)
-		totalPending += p
+		totalRelayed += p
 		totalCompleted += c
 		totalStuck += s
 	}
-	fmt.Fprintf(w, "all\t%d\t%d\t%d\t%d\n", totalPending, totalCompleted, totalStuck, totalPending+totalCompleted+totalStuck)
+	fmt.Fprintf(w, "all\t%d\t%d\t%d\t%d\n", totalRelayed, totalCompleted, totalStuck, totalRelayed+totalCompleted+totalStuck)
 	_ = w.Flush()
 
 	fmt.Println()

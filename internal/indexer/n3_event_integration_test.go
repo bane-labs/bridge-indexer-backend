@@ -119,7 +119,7 @@ func TestN3EventProcessor_RealDeposit(t *testing.T) {
 	if foundOp.SourceBlockHeight != uint64(testutil.N3MainnetEventBlock) {
 		t.Errorf("expected SourceBlockHeight=%d, got %d", testutil.N3MainnetEventBlock, foundOp.SourceBlockHeight)
 	}
-	if foundOp.Status != types.StatusPending {
+	if foundOp.Status != types.StatusRelayed {
 		t.Errorf("expected status=pending, got %s", foundOp.Status)
 	}
 	if foundOp.Timestamp.IsZero() {

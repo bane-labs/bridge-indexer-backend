@@ -81,8 +81,8 @@ func TestN3_NativeDeposit(t *testing.T) {
 	if op.Nonce != 42 {
 		t.Fatalf("expected nonce 42, got %d", op.Nonce)
 	}
-	if op.Status != types.StatusPending {
-		t.Fatalf("expected pending, got %s", op.Status)
+	if op.Status != types.StatusRelayed {
+		t.Fatalf("expected relayed, got %s", op.Status)
 	}
 	if op.Amount == nil || *op.Amount != "1000000000" {
 		t.Fatalf("expected amount 1000000000, got %v", op.Amount)
@@ -192,7 +192,7 @@ func TestN3_NativeWithdrawalComplete(t *testing.T) {
 		FromAddress:       "0xfrom",
 		ToAddress:         "NTo",
 		Timestamp:         time.Now().Add(-5 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	if err := opStore.SaveOperation(pendingOp); err != nil {
 		t.Fatalf("save pending: %v", err)
@@ -244,7 +244,7 @@ func TestN3_TokenWithdrawalComplete(t *testing.T) {
 		FromAddress:       "0xfrom",
 		ToAddress:         "NTo",
 		Timestamp:         time.Now().Add(-5 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	if err := opStore.SaveOperation(pendingOp); err != nil {
 		t.Fatalf("save pending: %v", err)
@@ -299,7 +299,7 @@ func TestN3_Execution(t *testing.T) {
 		FromAddress:       "0xfrom",
 		ToAddress:         "",
 		Timestamp:         time.Now().Add(-5 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	if err := opStore.SaveOperation(pendingOp); err != nil {
 		t.Fatalf("save pending: %v", err)

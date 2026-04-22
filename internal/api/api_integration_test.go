@@ -75,7 +75,7 @@ func setupIntegration(t *testing.T) (*echo.Echo, *datastore.Store, *datastore.Op
 			SourceBlockHeight: testutil.NeoXMainnetEventBlockFrom,
 			SourceTxHash:      "0xbbb222", FromAddress: "0xabcdef1234567890abcdef1234567890abcdef12",
 			ToAddress: "NNwfi3vDyG6WRx8QHzBBBQCy51XJDBj4GS",
-			Timestamp: now.Add(-30 * time.Minute), Status: types.StatusPending,
+			Timestamp: now.Add(-30 * time.Minute), Status: types.StatusRelayed,
 		},
 		{
 			BridgeType: types.BridgeTypeToken, Direction: types.DirectionDeposit, Nonce: 1,

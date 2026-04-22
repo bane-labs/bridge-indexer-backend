@@ -109,7 +109,7 @@ func TestGetOperations(t *testing.T) {
 		BridgeType: types.BridgeTypeNative, Direction: types.DirectionDeposit, Nonce: 1,
 		SourceChain: "neo_n3", DestinationChain: "neo_x", SourceBlockHeight: 100,
 		SourceTxHash: "0xtx", FromAddress: "f", ToAddress: "t",
-		Timestamp: time.Now(), Status: types.StatusPending,
+		Timestamp: time.Now(), Status: types.StatusRelayed,
 	}
 	_ = opStore.SaveOperation(op)
 
@@ -138,7 +138,7 @@ func TestGetOperationByNonce(t *testing.T) {
 		BridgeType: types.BridgeTypeNative, Direction: types.DirectionDeposit, Nonce: 42,
 		SourceChain: "neo_n3", DestinationChain: "neo_x", SourceBlockHeight: 100,
 		SourceTxHash: "0xtx", FromAddress: "f", ToAddress: "t",
-		Timestamp: time.Now(), Status: types.StatusPending,
+		Timestamp: time.Now(), Status: types.StatusRelayed,
 	}
 	_ = opStore.SaveOperation(op)
 
@@ -213,7 +213,7 @@ func TestGetOperationByNonce_MultipleResults(t *testing.T) {
 		BridgeType: types.BridgeTypeNative, Direction: types.DirectionDeposit, Nonce: 100,
 		SourceChain: "neo_n3", DestinationChain: "neo_x", SourceBlockHeight: 100,
 		SourceTxHash: "0xtx1", FromAddress: "f", ToAddress: "t",
-		Timestamp: time.Now(), Status: types.StatusPending,
+		Timestamp: time.Now(), Status: types.StatusRelayed,
 	}
 	op2 := &types.BridgeOperation{
 		BridgeType: types.BridgeTypeToken, Direction: types.DirectionWithdrawal, Nonce: 100,

@@ -55,7 +55,7 @@ func NewStuckDetector(opStore *datastore.OperationStore, a alerter.Alerter, thre
 }
 
 func (d *StuckDetector) Check(ctx context.Context) error {
-	pending := types.StatusPending
+	pending := types.StatusRelayed
 	ops, _, err := d.opStore.ListOperations(datastore.OperationFilter{Status: &pending})
 	if err != nil {
 		return err

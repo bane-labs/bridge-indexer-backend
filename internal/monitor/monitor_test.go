@@ -40,7 +40,7 @@ func TestStuckDetector_MarksStuck(t *testing.T) {
 		FromAddress:       "from",
 		ToAddress:         "to",
 		Timestamp:         time.Now().Add(-10 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	_ = opStore.SaveOperation(op)
 
@@ -69,7 +69,7 @@ func TestStuckDetector_KeepsPending(t *testing.T) {
 		FromAddress:       "from",
 		ToAddress:         "to",
 		Timestamp:         time.Now().Add(-1 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	_ = opStore.SaveOperation(op)
 
@@ -79,7 +79,7 @@ func TestStuckDetector_KeepsPending(t *testing.T) {
 	}
 
 	got, _ := opStore.GetOperation(types.BridgeTypeNative, types.DirectionDeposit, 2)
-	if got.Status != types.StatusPending {
+	if got.Status != types.StatusRelayed {
 		t.Fatalf("expected pending, got %s", got.Status)
 	}
 }
@@ -98,7 +98,7 @@ func TestStuckDetector_MessageExecutableUsesLongerThreshold(t *testing.T) {
 		FromAddress:       "0xs",
 		ToAddress:         "",
 		Timestamp:         time.Now().Add(-6 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 		AMBMessageType:    &ex,
 	}
 	_ = opStore.SaveOperation(op)
@@ -108,7 +108,7 @@ func TestStuckDetector_MessageExecutableUsesLongerThreshold(t *testing.T) {
 		t.Fatalf("check: %v", err)
 	}
 	got, _ := opStore.GetOperation(types.BridgeTypeMessage, types.DirectionWithdrawal, 5)
-	if got.Status != types.StatusPending {
+	if got.Status != types.StatusRelayed {
 		t.Fatalf("expected still pending (message threshold 24h), got %s", got.Status)
 	}
 }
@@ -126,7 +126,7 @@ func TestStuckDetector_NativeUsesCustomThreshold(t *testing.T) {
 		FromAddress:       "from",
 		ToAddress:         "to",
 		Timestamp:         time.Now().Add(-15 * time.Minute),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 	}
 	_ = opStore.SaveOperation(op)
 
@@ -138,7 +138,7 @@ func TestStuckDetector_NativeUsesCustomThreshold(t *testing.T) {
 		t.Fatalf("check: %v", err)
 	}
 	got, _ := opStore.GetOperation(types.BridgeTypeNative, types.DirectionDeposit, 3)
-	if got.Status != types.StatusPending {
+	if got.Status != types.StatusRelayed {
 		t.Fatalf("expected pending (native threshold 30m), got %s", got.Status)
 	}
 }
@@ -157,7 +157,7 @@ func TestStuckDetector_SkipsMessageStoreOnlyPending(t *testing.T) {
 		FromAddress:       "0xs",
 		ToAddress:         "",
 		Timestamp:         time.Now().Add(-48 * time.Hour),
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
 		AMBMessageType:    &so,
 	}
 	_ = opStore.SaveOperation(op)
@@ -167,7 +167,7 @@ func TestStuckDetector_SkipsMessageStoreOnlyPending(t *testing.T) {
 		t.Fatalf("check: %v", err)
 	}
 	got, _ := opStore.GetOperation(types.BridgeTypeMessage, types.DirectionWithdrawal, 1)
-	if got.Status != types.StatusPending {
+	if got.Status != types.StatusRelayed {
 		t.Fatalf("store_only should not be marked stuck, got %s", got.Status)
 	}
 }

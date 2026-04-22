@@ -186,6 +186,7 @@ func (p *NeoXEventProcessorImpl) handleNativeWithdrawal(log ethtypes.Log, blockT
 	}
 
 	amountStr := amount
+	settlement := types.SettlementStatusClaimable
 	return &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeNative,
 		Direction:         types.DirectionWithdrawal,
@@ -199,7 +200,8 @@ func (p *NeoXEventProcessorImpl) handleNativeWithdrawal(log ethtypes.Log, blockT
 		FromAddress:       from.Hex(),
 		ToAddress:         to.Hex(),
 		Timestamp:         blockTime,
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
+		SettlementStatus:  &settlement,
 	}, nil
 }
 
@@ -254,6 +256,7 @@ func (p *NeoXEventProcessorImpl) handleTokenWithdrawal(log ethtypes.Log, blockTi
 	if destTokenStr != "" {
 		destToken = &destTokenStr
 	}
+	settlement := types.SettlementStatusClaimable
 	return &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeToken,
 		Direction:         types.DirectionWithdrawal,
@@ -269,7 +272,8 @@ func (p *NeoXEventProcessorImpl) handleTokenWithdrawal(log ethtypes.Log, blockTi
 		FromAddress:       from.Hex(),
 		ToAddress:         to.Hex(),
 		Timestamp:         blockTime,
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
+		SettlementStatus:  &settlement,
 	}, nil
 }
 
@@ -312,6 +316,7 @@ func (p *NeoXEventProcessorImpl) handleMessageSend(log ethtypes.Log, blockTime t
 
 	ambType := ambTypePtrFromMessageSendData(log.Data)
 
+	msgSettlement := types.SettlementStatusWaitingForExecution
 	op := &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeMessage,
 		Direction:         types.DirectionWithdrawal,
@@ -324,7 +329,8 @@ func (p *NeoXEventProcessorImpl) handleMessageSend(log ethtypes.Log, blockTime t
 		FromAddress:       sender.Hex(),
 		ToAddress:         "",
 		Timestamp:         blockTime,
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
+		SettlementStatus:  &msgSettlement,
 		AMBMessageType:    ambType,
 	}
 	// STORE_ONLY and RESULT messages do not use the N3 Execution completion path for

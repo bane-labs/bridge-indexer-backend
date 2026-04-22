@@ -60,6 +60,8 @@ definitions:
         type: string
       status:
         $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.OperationStatus'
+      settlement_status:
+        $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.SettlementStatus'
       timestamp:
         description: source event time
         type: string
@@ -192,14 +194,22 @@ definitions:
     type: object
   github_com_bane-labs_bridge-indexer-backend_internal_types.OperationStatus:
     enum:
-    - pending
+    - relayed
     - completed
     - stuck
     type: string
     x-enum-varnames:
-    - StatusPending
+    - StatusRelayed
     - StatusCompleted
     - StatusStuck
+  github_com_bane-labs_bridge-indexer-backend_internal_types.SettlementStatus:
+    enum:
+    - claimable
+    - waiting for execution
+    type: string
+    x-enum-varnames:
+    - SettlementStatusClaimable
+    - SettlementStatusWaitingForExecution
   github_com_bane-labs_bridge-indexer-backend_internal_types.OverallHealth:
     properties:
       bridges:
@@ -329,7 +339,7 @@ paths:
         type: string
       - description: Filter by status
         enum:
-        - pending
+        - relayed
         - completed
         - stuck
         in: query

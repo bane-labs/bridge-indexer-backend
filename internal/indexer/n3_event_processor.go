@@ -141,6 +141,7 @@ func (p *N3EventProcessorImpl) handleNativeDeposit(
 		}
 	}
 
+	settlement := types.SettlementStatusClaimable
 	op := &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeNative,
 		Direction:         types.DirectionDeposit,
@@ -154,7 +155,8 @@ func (p *N3EventProcessorImpl) handleNativeDeposit(
 		FromAddress:       from,
 		ToAddress:         to,
 		Timestamp:         blockTime,
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
+		SettlementStatus:  &settlement,
 	}
 
 	return op, nil
@@ -220,6 +222,7 @@ func (p *N3EventProcessorImpl) handleTokenDeposit(
 		}
 	}
 
+	settlement := types.SettlementStatusClaimable
 	op := &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeToken,
 		Direction:         types.DirectionDeposit,
@@ -235,7 +238,8 @@ func (p *N3EventProcessorImpl) handleTokenDeposit(
 		FromAddress:       from,
 		ToAddress:         to,
 		Timestamp:         blockTime,
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
+		SettlementStatus:  &settlement,
 	}
 
 	return op, nil
@@ -351,6 +355,7 @@ func (p *N3EventProcessorImpl) handleN3MessageSend(
 		}
 	}
 
+	settlement := types.SettlementStatusWaitingForExecution
 	op := &types.BridgeOperation{
 		BridgeType:        types.BridgeTypeMessage,
 		Direction:         types.DirectionDeposit,
@@ -363,7 +368,8 @@ func (p *N3EventProcessorImpl) handleN3MessageSend(
 		FromAddress:       from,
 		ToAddress:         "",
 		Timestamp:         blockTime,
-		Status:            types.StatusPending,
+		Status:            types.StatusRelayed,
+		SettlementStatus:  &settlement,
 	}
 
 	return op, nil
