@@ -286,8 +286,8 @@ func TestAPI_OperationsListEndpoint(t *testing.T) {
 		}
 	})
 
-	t.Run("filter by status=pending", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/operations?status=pending", nil)
+	t.Run("filter by status=relayed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/operations?status=relayed", nil)
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 
@@ -301,7 +301,7 @@ func TestAPI_OperationsListEndpoint(t *testing.T) {
 		}
 		total := result["total"].(float64)
 		if total != 1 {
-			t.Fatalf("expected 1 pending operation, got %v", total)
+			t.Fatalf("expected 1 relayed operation, got %v", total)
 		}
 	})
 

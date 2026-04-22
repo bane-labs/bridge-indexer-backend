@@ -113,7 +113,7 @@ func TestGetOperations(t *testing.T) {
 	}
 	_ = opStore.SaveOperation(op)
 
-	req := httptest.NewRequest(http.MethodGet, "/operations?bridge_type=native&status=pending", nil)
+	req := httptest.NewRequest(http.MethodGet, "/operations?bridge_type=native&status=relayed", nil)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
