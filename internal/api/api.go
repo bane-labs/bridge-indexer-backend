@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 	"github.com/bane-labs/bridge-indexer-backend/internal/monitor"
+	"github.com/bane-labs/bridge-indexer-backend/internal/tokensymbol"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
 )
 
@@ -34,10 +36,17 @@ type Handler struct {
 	opStore *datastore.OperationStore
 	health  *monitor.HealthAggregator
 	sync    *monitor.SyncComputer
+	symbols *tokensymbol.Resolver
 }
 
-func NewHandler(store *datastore.Store, opStore *datastore.OperationStore, health *monitor.HealthAggregator, sync *monitor.SyncComputer) *Handler {
-	return &Handler{store: store, opStore: opStore, health: health, sync: sync}
+func NewHandler(
+	store *datastore.Store,
+	opStore *datastore.OperationStore,
+	health *monitor.HealthAggregator,
+	sync *monitor.SyncComputer,
+	symbols *tokensymbol.Resolver,
+) *Handler {
+	return &Handler{store: store, opStore: opStore, health: health, sync: sync, symbols: symbols}
 }
 
 func RegisterRoutes(e *echo.Echo, h *Handler) {
@@ -217,5 +226,41 @@ func (h *Handler) GetSyncInstances(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
+	if h.symbols != nil {
+		ctx := c.Request().Context()
+		enrichInstanceTokenSymbols(ctx, h.symbols, syncs)
+	}
 	return c.JSON(http.StatusOK, syncs)
+}
+
+func enrichInstanceTokenSymbols(ctx context.Context, r *tokensymbol.Resolver, syncs []types.DirectionalInstanceSync) {
+	if r == nil {
+		return
+	}
+	for i := range syncs {
+		if syncs[i].BridgeType != types.BridgeTypeToken {
+			continue
+		}
+		if sym := tokenSymbolIfResolved(ctx, r, syncs[i].SrcChain, syncs[i].SrcToken); sym != nil {
+			syncs[i].SrcTokenSymbol = sym
+		}
+		if sym := tokenSymbolIfResolved(ctx, r, syncs[i].DstChain, syncs[i].DstToken); sym != nil {
+			syncs[i].DstTokenSymbol = sym
+		}
+	}
+}
+
+func tokenSymbolIfResolved(ctx context.Context, r *tokensymbol.Resolver, chain string, token *string) *string {
+	if token == nil {
+		return nil
+	}
+	t := *token
+	if t == "" || t == "unknown" {
+		return nil
+	}
+	s := r.ResolveOnChain(ctx, chain, t)
+	if s == "" {
+		return nil
+	}
+	return &s
 }

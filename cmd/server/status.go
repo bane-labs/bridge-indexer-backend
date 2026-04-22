@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/bane-labs/bridge-indexer-backend/internal/tokensymbol"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/n3"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/neox"
@@ -88,13 +87,6 @@ type statusTrend struct {
 	samples map[string]statusSample
 }
 
-type tokenSymbolResolver struct {
-	http          *http.Client
-	n3Endpoints   []string
-	neoxEndpoints []string
-	cache         map[string]string
-}
-
 func runStatus(cmd *cobra.Command, args []string) error {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -128,12 +120,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	ticker := time.NewTicker(refresh)
 	defer ticker.Stop()
 	trend := &statusTrend{samples: make(map[string]statusSample)}
-	symbolResolver := &tokenSymbolResolver{
-		http:          &http.Client{Timeout: 6 * time.Second},
-		n3Endpoints:   cfg.N3RPCEndpoints,
-		neoxEndpoints: cfg.NeoXRPCEndpoints,
-		cache:         make(map[string]string),
-	}
+	symbolResolver := tokensymbol.New(cfg.N3RPCEndpoints, cfg.NeoXRPCEndpoints)
 
 	for {
 		if err := renderStatusSnapshot(ctx, apiClient, n3Client, neoxClient, n3Err, neoxErr, trend, symbolResolver); err != nil {
@@ -157,7 +144,7 @@ func renderStatusSnapshot(
 	n3InitErr error,
 	neoxInitErr error,
 	trend *statusTrend,
-	symbolResolver *tokenSymbolResolver,
+	symbolResolver *tokensymbol.Resolver,
 ) error {
 	n3Chain := chainStatus{name: "neo_n3"}
 	neoxChain := chainStatus{name: "neo_x"}
@@ -777,7 +764,7 @@ func printBridgeStateTable(bs bridgePairState) {
 	fmt.Printf("+-%s-+-%s-+-%s-+-%s-+\n", strings.Repeat("-", widths[0]), strings.Repeat("-", widths[1]), strings.Repeat("-", widths[2]), strings.Repeat("-", widths[3]))
 }
 
-func enrichBridgePairDisplayNames(ctx context.Context, resolver *tokenSymbolResolver, states []bridgePairState) {
+func enrichBridgePairDisplayNames(ctx context.Context, resolver *tokensymbol.Resolver, states []bridgePairState) {
 	if resolver == nil {
 		return
 	}
@@ -788,8 +775,8 @@ func enrichBridgePairDisplayNames(ctx context.Context, resolver *tokenSymbolReso
 		n3Addr := strPtrOrUnknown(states[i].n3Token)
 		neoXAddr := strPtrOrUnknown(states[i].neoXToken)
 
-		n3Symbol := resolver.resolveN3Symbol(ctx, n3Addr)
-		neoXSymbol := resolver.resolveNeoXSymbol(ctx, neoXAddr)
+		n3Symbol := resolver.ResolveN3Symbol(ctx, n3Addr)
+		neoXSymbol := resolver.ResolveNeoXSymbol(ctx, neoXAddr)
 
 		n3Label := n3Addr
 		if n3Symbol != "" {
@@ -801,167 +788,6 @@ func enrichBridgePairDisplayNames(ctx context.Context, resolver *tokenSymbolReso
 		}
 		states[i].displayName = fmt.Sprintf("token bridge (n3=%s, neox=%s)", n3Label, neoXLabel)
 	}
-}
-
-func (r *tokenSymbolResolver) resolveN3Symbol(ctx context.Context, contract string) string {
-	if contract == "" || contract == "unknown" {
-		return ""
-	}
-	cacheKey := "n3|" + strings.ToLower(contract)
-	if v, ok := r.cache[cacheKey]; ok {
-		return v
-	}
-	for _, ep := range r.n3Endpoints {
-		if !strings.HasPrefix(ep, "http://") && !strings.HasPrefix(ep, "https://") {
-			continue
-		}
-		body := map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      1,
-			"method":  "invokefunction",
-			"params":  []interface{}{contract, "symbol"},
-		}
-		raw, err := r.rpcCall(ctx, ep, body)
-		if err != nil {
-			continue
-		}
-		s := parseN3Symbol(raw)
-		if s != "" {
-			r.cache[cacheKey] = s
-			return s
-		}
-	}
-	r.cache[cacheKey] = ""
-	return ""
-}
-
-func (r *tokenSymbolResolver) resolveNeoXSymbol(ctx context.Context, contract string) string {
-	if contract == "" || contract == "unknown" {
-		return ""
-	}
-	cacheKey := "neox|" + strings.ToLower(contract)
-	if v, ok := r.cache[cacheKey]; ok {
-		return v
-	}
-	for _, ep := range r.neoxEndpoints {
-		if !strings.HasPrefix(ep, "http://") && !strings.HasPrefix(ep, "https://") {
-			continue
-		}
-		body := map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      1,
-			"method":  "eth_call",
-			"params": []interface{}{
-				map[string]string{
-					"to":   contract,
-					"data": "0x95d89b41", // symbol()
-				},
-				"latest",
-			},
-		}
-		raw, err := r.rpcCall(ctx, ep, body)
-		if err != nil {
-			continue
-		}
-		s := parseEthCallSymbol(raw)
-		if s != "" {
-			r.cache[cacheKey] = s
-			return s
-		}
-	}
-	r.cache[cacheKey] = ""
-	return ""
-}
-
-func (r *tokenSymbolResolver) rpcCall(ctx context.Context, endpoint string, body map[string]interface{}) (map[string]interface{}, error) {
-	b, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(b)))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	res, err := r.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("http %s", res.Status)
-	}
-	var raw map[string]interface{}
-	if err := json.NewDecoder(res.Body).Decode(&raw); err != nil {
-		return nil, err
-	}
-	if raw["error"] != nil {
-		return nil, fmt.Errorf("rpc error")
-	}
-	return raw, nil
-}
-
-func parseN3Symbol(raw map[string]interface{}) string {
-	result, ok := raw["result"].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	stack, ok := result["stack"].([]interface{})
-	if !ok || len(stack) == 0 {
-		return ""
-	}
-	item, ok := stack[0].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	typ, _ := item["type"].(string)
-	val, _ := item["value"].(string)
-	if val == "" {
-		return ""
-	}
-	switch typ {
-	case "String":
-		return strings.TrimSpace(strings.TrimRight(val, "\x00"))
-	case "ByteString", "Buffer", "ByteArray":
-		if b, err := base64.StdEncoding.DecodeString(val); err == nil {
-			return strings.TrimSpace(strings.TrimRight(string(b), "\x00"))
-		}
-		if b, err := hex.DecodeString(strings.TrimPrefix(val, "0x")); err == nil {
-			return strings.TrimSpace(strings.TrimRight(string(b), "\x00"))
-		}
-	}
-	return ""
-}
-
-func parseEthCallSymbol(raw map[string]interface{}) string {
-	hexOut, ok := raw["result"].(string)
-	if !ok || hexOut == "" || hexOut == "0x" {
-		return ""
-	}
-	out, err := hex.DecodeString(strings.TrimPrefix(hexOut, "0x"))
-	if err != nil || len(out) == 0 {
-		return ""
-	}
-
-	// bytes32 response fallback
-	if len(out) == 32 {
-		return strings.TrimSpace(strings.TrimRight(string(out), "\x00"))
-	}
-
-	// ABI dynamic string encoding: offset(32) + len(32) + data
-	if len(out) < 96 {
-		return ""
-	}
-	dataLen := int(out[63])
-	if dataLen <= 0 {
-		return ""
-	}
-	start := 64
-	end := start + dataLen
-	if end > len(out) {
-		return ""
-	}
-	return strings.TrimSpace(strings.TrimRight(string(out[start:end]), "\x00"))
 }
 
 func (c *statusAPIClient) getJSON(ctx context.Context, path string, q url.Values, dest interface{}) error {

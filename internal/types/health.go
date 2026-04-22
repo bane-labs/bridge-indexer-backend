@@ -18,6 +18,4 @@ type BridgeHealth struct {
 	AvgCompletion24h  *float64     `json:"avg_completion_24h_seconds,omitempty"`
 	AvgCompletion7d   *float64     `json:"avg_completion_7d_seconds,omitempty"`
 	UptimePercentage  *float64     `json:"uptime_percentage,omitempty"`
-	PendingOperations int          `json:"pending_operations"`
-	StuckOperations   int          `json:"stuck_operations"`
 }

@@ -31,7 +31,7 @@ func setup(t *testing.T) (*echo.Echo, *Handler, *datastore.OperationStore) {
 	pause := monitor.NewPauseDetector(store, slog.Default())
 	health := monitor.NewHealthAggregator(opStore, pause, slog.Default())
 	syncComputer := monitor.NewSyncComputer(datastore.NewBridgeStateStore(store), slog.Default())
-	handler := NewHandler(store, opStore, health, syncComputer)
+	handler := NewHandler(store, opStore, health, syncComputer, nil)
 
 	e := echo.New()
 	RegisterRoutes(e, handler)

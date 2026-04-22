@@ -148,14 +148,8 @@ func (h *HealthAggregator) GetDelays() (*types.DelayMetrics, error) {
 
 func (h *HealthAggregator) computeBridgeHealth(bt types.BridgeType) (types.BridgeHealth, error) {
 	btCopy := bt
-	pending := types.StatusPending
 	stuck := types.StatusStuck
 	completed := types.StatusCompleted
-
-	pendingCount, err := h.opStore.CountOperations(datastore.OperationFilter{BridgeType: &btCopy, Status: &pending})
-	if err != nil {
-		return types.BridgeHealth{}, err
-	}
 
 	stuckCount, err := h.opStore.CountOperations(datastore.OperationFilter{BridgeType: &btCopy, Status: &stuck})
 	if err != nil {
@@ -200,8 +194,6 @@ func (h *HealthAggregator) computeBridgeHealth(bt types.BridgeType) (types.Bridg
 		DepositsPaused:    depPaused,
 		WithdrawalsPaused: wdPaused,
 		UptimePercentage:  uptime,
-		PendingOperations: pendingCount,
-		StuckOperations:   stuckCount,
 	}, nil
 }
 

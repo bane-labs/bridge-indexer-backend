@@ -248,9 +248,6 @@ func TestHealthAggregator_StuckDoesNotAffectStatus(t *testing.T) {
 			if b.Status != types.HealthStatusHealthy {
 				t.Fatalf("expected healthy (stuck ops do not degrade health), got %s", b.Status)
 			}
-			if b.StuckOperations != 1 {
-				t.Fatalf("expected 1 stuck, got %d", b.StuckOperations)
-			}
 		}
 	}
 	if !found {

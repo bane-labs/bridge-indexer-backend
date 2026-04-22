@@ -16,6 +16,7 @@ import (
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/alerter"
 	"github.com/bane-labs/bridge-indexer-backend/internal/api"
+	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 	"github.com/bane-labs/bridge-indexer-backend/internal/indexer"
 	"github.com/bane-labs/bridge-indexer-backend/internal/monitor"
 	"github.com/bane-labs/bridge-indexer-backend/internal/testutil"
@@ -87,7 +88,9 @@ func TestServerStartup_BootAndShutdown(t *testing.T) {
 	// 6. Echo + routes
 	e := echo.New()
 	e.HideBanner = true
-	handler := api.NewHandler(store, opStore, healthAgg)
+	bridgeStateStore := datastore.NewBridgeStateStore(store)
+	syncComputer := monitor.NewSyncComputer(bridgeStateStore, logger)
+	handler := api.NewHandler(store, opStore, healthAgg, syncComputer, nil)
 	api.RegisterRoutes(e, handler)
 
 	// 7. Start HTTP server on random port

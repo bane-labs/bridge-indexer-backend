@@ -24,6 +24,7 @@ import (
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 	"github.com/bane-labs/bridge-indexer-backend/internal/indexer"
 	"github.com/bane-labs/bridge-indexer-backend/internal/monitor"
+	"github.com/bane-labs/bridge-indexer-backend/internal/tokensymbol"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/blockcache"
 	"github.com/bane-labs/bridge-indexer-backend/pkg/n3"
@@ -270,7 +271,8 @@ func newHTTPAPI(
 	}
 	bridgeStateStore := datastore.NewBridgeStateStore(store)
 	syncComputer := monitor.NewSyncComputer(bridgeStateStore, logger)
-	handler := api.NewHandler(store, opStore, healthAgg, syncComputer)
+	symbolResolver := tokensymbol.New(cfg.N3RPCEndpoints, cfg.NeoXRPCEndpoints)
+	handler := api.NewHandler(store, opStore, healthAgg, syncComputer, symbolResolver)
 	api.RegisterRoutes(e, handler)
 	e.GET("/swagger/*", echoSwagger.WrapHandler)
 	logger.Info("API routes registered")

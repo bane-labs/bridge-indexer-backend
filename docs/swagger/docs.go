@@ -278,14 +278,8 @@ const docTemplate = `{
                 "deposits_paused": {
                     "type": "boolean"
                 },
-                "pending_operations": {
-                    "type": "integer"
-                },
                 "status": {
                     "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.HealthStatus"
-                },
-                "stuck_operations": {
-                    "type": "integer"
                 },
                 "uptime_percentage": {
                     "type": "number"
@@ -438,6 +432,9 @@ const docTemplate = `{
                 "dst_token": {
                     "type": "string"
                 },
+                "dst_token_symbol": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -454,6 +451,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "src_token": {
+                    "type": "string"
+                },
+                "src_token_symbol": {
                     "type": "string"
                 },
                 "status": {

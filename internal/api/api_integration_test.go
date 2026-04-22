@@ -29,7 +29,7 @@ func setupIntegration(t *testing.T) (*echo.Echo, *datastore.Store, *datastore.Op
 	pause := monitor.NewPauseDetector(store, slog.Default())
 	health := monitor.NewHealthAggregator(opStore, pause, slog.Default())
 	syncComputer := monitor.NewSyncComputer(datastore.NewBridgeStateStore(store), slog.Default())
-	handler := NewHandler(store, opStore, health, syncComputer)
+	handler := NewHandler(store, opStore, health, syncComputer, nil)
 
 	e := echo.New()
 	RegisterRoutes(e, handler)
@@ -128,7 +128,6 @@ func TestAPI_HealthEndpoint(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	// Stuck operations in the DB are reflected per-bridge but do not set degraded/unhealthy.
 	if result.Status == "" {
 		t.Fatal("expected non-empty status")
 	}
@@ -171,14 +170,6 @@ func TestAPI_HealthBridgesEndpoint(t *testing.T) {
 		t.Fatalf("expected 3 bridge types, got %d", len(result))
 	}
 
-	// Verify the message bridge shows stuck operations.
-	for _, b := range result {
-		if b.BridgeType == types.BridgeTypeMessage {
-			if b.StuckOperations != 1 {
-				t.Errorf("expected 1 stuck message op, got %d", b.StuckOperations)
-			}
-		}
-	}
 }
 
 // TestAPI_HealthDelaysEndpoint verifies /health/delays returns delay metrics.

@@ -210,9 +210,6 @@ func TestHealthAggregator_WithRealOperations(t *testing.T) {
 	if native.Status != types.HealthStatusHealthy {
 		t.Errorf("expected native healthy, got %s", native.Status)
 	}
-	if native.StuckOperations != 1 {
-		t.Errorf("expected 1 stuck native op, got %d", native.StuckOperations)
-	}
 
 	// Token has 1 completed, 0 stuck → healthy
 	token, ok := bridgeMap[types.BridgeTypeToken]
