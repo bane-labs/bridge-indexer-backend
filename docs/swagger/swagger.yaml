@@ -112,6 +112,11 @@ definitions:
         $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.BridgeType'
       delta_nonce:
         type: integer
+      dst_block_number:
+        type: integer
+      dst_observed_at:
+        type: string
+        format: date-time
       dst_chain:
         type: string
       dst_nonce:
@@ -126,6 +131,11 @@ definitions:
         type: string
       reason:
         $ref: '#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.DirectionalSyncReason'
+      src_block_number:
+        type: integer
+      src_observed_at:
+        type: string
+        format: date-time
       src_chain:
         type: string
       src_nonce:

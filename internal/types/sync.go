@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 // DirectionalSyncStatus describes source/destination sync state per directional instance.
 type DirectionalSyncStatus string
 
@@ -38,5 +40,10 @@ type DirectionalInstanceSync struct {
 	DstNonce       *uint64               `json:"dst_nonce,omitempty"`
 	SrcRoot        *string               `json:"src_root,omitempty"`
 	DstRoot        *string               `json:"dst_root,omitempty"`
+	// Side metadata is present only when the corresponding state has been observed.
+	SrcBlockNumber *uint64               `json:"src_block_number,omitempty"`
+	DstBlockNumber *uint64               `json:"dst_block_number,omitempty"`
+	SrcObservedAt  *time.Time            `json:"src_observed_at,omitempty"`
+	DstObservedAt  *time.Time            `json:"dst_observed_at,omitempty"`
 	Reason         DirectionalSyncReason `json:"reason"`
 }

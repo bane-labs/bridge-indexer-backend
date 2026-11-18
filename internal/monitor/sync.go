@@ -47,17 +47,25 @@ func (s *SyncComputer) computeOne(state types.DirectionalBridgeState) types.Dire
 		DstToken:   state.DstToken,
 	}
 
+	if src := state.SourceState; src != nil {
+		out.SrcNonce = &src.Nonce
+		out.SrcRoot = src.Root
+		out.SrcBlockNumber = &src.BlockNumber
+		if !src.ObservedAt.IsZero() {
+			out.SrcObservedAt = &src.ObservedAt
+		}
+	}
+	if dst := state.DestState; dst != nil {
+		out.DstNonce = &dst.Nonce
+		out.DstRoot = dst.Root
+		out.DstBlockNumber = &dst.BlockNumber
+		if !dst.ObservedAt.IsZero() {
+			out.DstObservedAt = &dst.ObservedAt
+		}
+	}
 	if state.SourceState == nil || state.DestState == nil {
 		out.Status = types.DirectionalSyncStatusUnknown
 		out.Reason = types.DirectionalSyncReasonMissingState
-		if state.SourceState != nil {
-			out.SrcNonce = &state.SourceState.Nonce
-			out.SrcRoot = state.SourceState.Root
-		}
-		if state.DestState != nil {
-			out.DstNonce = &state.DestState.Nonce
-			out.DstRoot = state.DestState.Root
-		}
 		return out
 	}
 
@@ -65,10 +73,6 @@ func (s *SyncComputer) computeOne(state types.DirectionalBridgeState) types.Dire
 	dstNonce := state.DestState.Nonce
 	delta := int64(srcNonce) - int64(dstNonce)
 	out.DeltaNonce = &delta
-	out.SrcNonce = &srcNonce
-	out.DstNonce = &dstNonce
-	out.SrcRoot = state.SourceState.Root
-	out.DstRoot = state.DestState.Root
 
 	switch {
 	case srcNonce == dstNonce && rootsEqual(state.SourceState.Root, state.DestState.Root):
