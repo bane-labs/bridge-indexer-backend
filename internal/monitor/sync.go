@@ -58,9 +58,17 @@ func (s *SyncComputer) computeOne(state types.DirectionalBridgeState) types.Dire
 	if dst := state.DestState; dst != nil {
 		out.DstNonce = &dst.Nonce
 		out.DstRoot = dst.Root
-		out.DstBlockNumber = &dst.BlockNumber
-		if !dst.ObservedAt.IsZero() {
-			out.DstObservedAt = &dst.ObservedAt
+		// Older mirrored message states predate the persisted synthetic marker.
+		src := state.SourceState
+		out.DstSynthetic = dst.Synthetic || (state.BridgeType == types.BridgeTypeMessage &&
+			state.SrcChain == "neo_x" && src != nil && dst.TxHash != "" &&
+			dst.TxHash == src.TxHash && dst.BlockNumber == src.BlockNumber &&
+			dst.Nonce == src.Nonce)
+		if !out.DstSynthetic {
+			out.DstBlockNumber = &dst.BlockNumber
+			if !dst.ObservedAt.IsZero() {
+				out.DstObservedAt = &dst.ObservedAt
+			}
 		}
 	}
 	if state.SourceState == nil || state.DestState == nil {

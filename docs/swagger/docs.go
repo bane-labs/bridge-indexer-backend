@@ -427,6 +427,9 @@ const docTemplate = `{
                     "type": "string",
                     "format": "date-time"
                 },
+                "dst_synthetic": {
+                    "type": "boolean"
+                },
                 "dst_chain": {
                     "type": "string"
                 },

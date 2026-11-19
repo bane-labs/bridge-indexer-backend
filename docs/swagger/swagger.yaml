@@ -117,6 +117,8 @@ definitions:
       dst_observed_at:
         type: string
         format: date-time
+      dst_synthetic:
+        type: boolean
       dst_chain:
         type: string
       dst_nonce:

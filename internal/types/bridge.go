@@ -77,6 +77,7 @@ type BridgeOperation struct {
 
 // ChainState represents the latest observed state on one side of a directional bridge.
 type ChainState struct {
+	Synthetic   bool      `json:"synthetic,omitempty"` // destination bookkeeping without a destination-chain observation
 	Nonce       uint64    `json:"nonce"`
 	Root        *string   `json:"root,omitempty"`
 	BlockNumber uint64    `json:"block_number"`

@@ -40,6 +40,7 @@ type DirectionalInstanceSync struct {
 	DstNonce       *uint64               `json:"dst_nonce,omitempty"`
 	SrcRoot        *string               `json:"src_root,omitempty"`
 	DstRoot        *string               `json:"dst_root,omitempty"`
+	DstSynthetic   bool                  `json:"dst_synthetic,omitempty"`
 	// Side metadata is present only when the corresponding state has been observed.
 	SrcBlockNumber *uint64               `json:"src_block_number,omitempty"`
 	DstBlockNumber *uint64               `json:"dst_block_number,omitempty"`

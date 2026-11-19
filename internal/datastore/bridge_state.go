@@ -306,6 +306,7 @@ func (bs *BridgeStateStore) BuildSourceStateWriteOps(ops []*types.BridgeOperatio
 		// destination state to the same nonce so the sync computer reports synced.
 		if skipsDest {
 			nextDst := BuildDestChainState(op.Nonce, op.SourceBlockHeight, op.SourceTxHash, op.Timestamp, op.Root)
+			nextDst.Synthetic = true
 			var currentDst types.ChainState
 			if err := bs.store.Get(bridgeDstPrefix+instanceID, &currentDst); err == nil {
 				if shouldReplaceChainState(&currentDst, nextDst) {

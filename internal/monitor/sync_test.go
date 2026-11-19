@@ -268,3 +268,21 @@ func TestSyncComputer_SideObservations(t *testing.T) {
 		t.Fatalf("unexpected partial observations: %+v", got)
 	}
 }
+
+func TestSyncComputer_SyntheticDestination(t *testing.T) {
+	root := "0xabc"
+	for _, marked := range []bool{false, true} {
+		side := types.ChainState{Nonce: 3, Root: &root, BlockNumber: 42, TxHash: "0xsource", ObservedAt: time.Now()}
+		dest := side
+		dest.Synthetic = marked
+		state := types.DirectionalBridgeState{
+			BridgeType: types.BridgeTypeMessage, SrcChain: "neo_x", DstChain: "neo_n3",
+			SourceState: &side, DestState: &dest,
+		}
+		got := (&SyncComputer{}).computeOne(state)
+		if got.Status != types.DirectionalSyncStatusSynced || !got.DstSynthetic ||
+			got.DstBlockNumber != nil || got.DstObservedAt != nil || got.SrcObservedAt == nil {
+			t.Fatalf("marked=%v: unexpected synthetic observation: %+v", marked, got)
+		}
+	}
+}
