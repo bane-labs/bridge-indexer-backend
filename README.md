@@ -33,9 +33,11 @@ The system monitors three distinct bridge types with independent status tracking
 
 ### Operation Lifecycle
 
-1. Source-chain event (deposit or withdrawal)
-2. Destination-chain execution with matching nonce
-3. Time between events determines health status and alerting thresholds
+1. A source-chain event requests a deposit or withdrawal.
+2. Relaying establishes arrival on the destination chain.
+3. Assets are distributed during relaying or become claimable. Executable messages can be executed after arrival. Store-only and result messages have no execution requirement.
+
+Settlement and execution are being separated in the operation model. The current API retains its legacy completion fields during the additive rollout. See the [lifecycle specification](docs/operation-lifecycle.md) for event mappings, compatibility rules, and recovery requirements, and the [domain glossary](CONTEXT.md) for terminology.
 
 ## Requirements
 
