@@ -2,6 +2,10 @@
 
 This directory contains project documentation.
 
+## Lifecycle semantics
+
+The [settlement and execution specification](operation-lifecycle.md) defines the agreed operation model, chain-event mapping, API compatibility, frontend presentation, and historical recovery requirements. The [domain glossary](../CONTEXT.md) defines the corresponding terminology.
+
 ## Structure
 
 Please add documentation files to this directory as needed:
