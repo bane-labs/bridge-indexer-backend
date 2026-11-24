@@ -244,3 +244,45 @@ func assertStringPtr(t *testing.T, field string, got, want *string) {
 		t.Fatalf("%s = %q, want %q", field, *got, *want)
 	}
 }
+
+func TestSyncComputer_SideObservations(t *testing.T) {
+	srcTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	dstTime := srcTime.Add(time.Minute)
+	state := types.DirectionalBridgeState{
+		SourceState: &types.ChainState{BlockNumber: 0, ObservedAt: srcTime},
+		DestState:   &types.ChainState{BlockNumber: 12, ObservedAt: dstTime},
+	}
+	computer := SyncComputer{}
+	got := computer.computeOne(state)
+	if got.SrcBlockNumber == nil || *got.SrcBlockNumber != 0 ||
+		got.SrcObservedAt == nil || !got.SrcObservedAt.Equal(srcTime) ||
+		got.DstBlockNumber == nil || *got.DstBlockNumber != 12 ||
+		got.DstObservedAt == nil || !got.DstObservedAt.Equal(dstTime) {
+		t.Fatalf("unexpected side observations: %+v", got)
+	}
+
+	state.DestState = nil
+	got = computer.computeOne(state)
+	if got.Status != types.DirectionalSyncStatusUnknown || got.SrcObservedAt == nil ||
+		got.DstBlockNumber != nil || got.DstObservedAt != nil {
+		t.Fatalf("unexpected partial observations: %+v", got)
+	}
+}
+
+func TestSyncComputer_SyntheticDestination(t *testing.T) {
+	root := "0xabc"
+	for _, marked := range []bool{false, true} {
+		side := types.ChainState{Nonce: 3, Root: &root, BlockNumber: 42, TxHash: "0xsource", ObservedAt: time.Now()}
+		dest := side
+		dest.Synthetic = marked
+		state := types.DirectionalBridgeState{
+			BridgeType: types.BridgeTypeMessage, SrcChain: "neo_x", DstChain: "neo_n3",
+			SourceState: &side, DestState: &dest,
+		}
+		got := (&SyncComputer{}).computeOne(state)
+		if got.Status != types.DirectionalSyncStatusSynced || !got.DstSynthetic ||
+			got.DstBlockNumber != nil || got.DstObservedAt != nil || got.SrcObservedAt == nil {
+			t.Fatalf("marked=%v: unexpected synthetic observation: %+v", marked, got)
+		}
+	}
+}

@@ -101,6 +101,9 @@ func (bs *BridgeStateStore) GetBridgeState(instanceID string) (*types.Directiona
 	if err := bs.store.Get(bridgeDstPrefix+instanceID, &dstCS); err == nil {
 		state.DestState = &dstCS
 	}
+	if err := bs.markSyntheticDestination(&state); err != nil {
+		return nil, err
+	}
 	return &state, nil
 }
 
@@ -166,9 +169,35 @@ func (bs *BridgeStateStore) ListBridgeStates() ([]types.DirectionalBridgeState, 
 	}
 	states := make([]types.DirectionalBridgeState, 0, len(merged))
 	for _, st := range merged {
+		if err := bs.markSyntheticDestination(st); err != nil {
+			return nil, err
+		}
 		states = append(states, *st)
 	}
 	return states, nil
+}
+
+// Recover provenance for records written before synthetic destinations were marked.
+// Look up the operation at the destination nonce, independently of newer source state.
+func (bs *BridgeStateStore) markSyntheticDestination(state *types.DirectionalBridgeState) error {
+	if state.BridgeType != types.BridgeTypeMessage || state.SrcChain != "neo_x" ||
+		state.DestState == nil || state.DestState.Synthetic {
+		return nil
+	}
+	var op types.BridgeOperation
+	err := bs.store.Get(operationKey(types.BridgeTypeMessage, types.DirectionWithdrawal, state.DestState.Nonce), &op)
+	if err == ErrNotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read destination provenance: %w", err)
+	}
+	if messageNeoXWithdrawalCompletedNeedsSourceState(&op) &&
+		op.SourceChain == state.SrcChain && op.DestinationChain == state.DstChain &&
+		op.SourceTxHash == state.DestState.TxHash && op.SourceBlockHeight == state.DestState.BlockNumber {
+		state.DestState.Synthetic = true
+	}
+	return nil
 }
 
 func (bs *BridgeStateStore) readChainStateMaybe(key string) *types.ChainState {
@@ -306,6 +335,7 @@ func (bs *BridgeStateStore) BuildSourceStateWriteOps(ops []*types.BridgeOperatio
 		// destination state to the same nonce so the sync computer reports synced.
 		if skipsDest {
 			nextDst := BuildDestChainState(op.Nonce, op.SourceBlockHeight, op.SourceTxHash, op.Timestamp, op.Root)
+			nextDst.Synthetic = true
 			var currentDst types.ChainState
 			if err := bs.store.Get(bridgeDstPrefix+instanceID, &currentDst); err == nil {
 				if shouldReplaceChainState(&currentDst, nextDst) {
@@ -485,6 +515,7 @@ func (bs *BridgeStateStore) RebuildFromOperations(logger *slog.Logger) error {
 				ct,
 				agg.maxDstOp.Root,
 			)
+			state.DestState.Synthetic = messageNeoXWithdrawalCompletedNeedsSourceState(agg.maxDstOp)
 			changed = true
 		}
 

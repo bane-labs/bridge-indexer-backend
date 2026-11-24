@@ -424,3 +424,53 @@ func TestBridgeStateStore_InstanceIDFromOperation(t *testing.T) {
 		t.Fatalf("expected %q, got %q", expected, id2)
 	}
 }
+
+func TestRebuildSyntheticDestinationBehindSource(t *testing.T) {
+	for _, messageType := range []string{"store_only", "result"} {
+		t.Run(messageType, func(t *testing.T) {
+			store := newTestStore(t)
+			bs := NewBridgeStateStore(store)
+			now := time.Now().UTC()
+			completed := types.BridgeOperation{
+				BridgeType: types.BridgeTypeMessage, Direction: types.DirectionWithdrawal,
+				SourceChain: "neo_x", DestinationChain: "neo_n3",
+				Nonce: 3, SourceBlockHeight: 30, SourceTxHash: "0xsynthetic",
+				Timestamp: now, Status: types.StatusCompleted, AMBMessageType: &messageType,
+			}
+			pending := completed
+			pending.Nonce = 4
+			pending.Status = types.StatusPending
+			pending.SourceTxHash = "0xnew"
+			pending.SourceBlockHeight = 40
+			if err := store.Set(operationKeyForOp(&completed), &completed); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Set(operationKeyForOp(&pending), &pending); err != nil {
+				t.Fatal(err)
+			}
+			if err := bs.RebuildFromOperations(nil); err != nil {
+				t.Fatal(err)
+			}
+			id := InstanceIDFromOperation(&completed)
+			state, err := bs.GetBridgeState(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.SourceState.Nonce != 4 || state.DestState.Nonce != 3 || !state.DestState.Synthetic {
+				t.Fatalf("invalid rebuilt state: %+v", state)
+			}
+			// Simulate an older unmarked record with a newer source checkpoint.
+			state.DestState.Synthetic = false
+			if err := bs.SaveBridgeState(state); err != nil {
+				t.Fatal(err)
+			}
+			states, err := bs.ListBridgeStates()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(states) != 1 || !states[0].DestState.Synthetic {
+				t.Fatalf("legacy provenance lost: %+v", states)
+			}
+		})
+	}
+}

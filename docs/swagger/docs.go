@@ -420,6 +420,16 @@ const docTemplate = `{
                 "delta_nonce": {
                     "type": "integer"
                 },
+                "dst_block_number": {
+                    "type": "integer"
+                },
+                "dst_observed_at": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "dst_synthetic": {
+                    "type": "boolean"
+                },
                 "dst_chain": {
                     "type": "string"
                 },
@@ -440,6 +450,13 @@ const docTemplate = `{
                 },
                 "reason": {
                     "$ref": "#/definitions/github_com_bane-labs_bridge-indexer-backend_internal_types.DirectionalSyncReason"
+                },
+                "src_block_number": {
+                    "type": "integer"
+                },
+                "src_observed_at": {
+                    "type": "string",
+                    "format": "date-time"
                 },
                 "src_chain": {
                     "type": "string"
