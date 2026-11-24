@@ -1,5 +1,34 @@
 # Settlement and execution
 
+## Implementation status: persistence batch
+
+The datastore now has additive `lifecycle:v1:*` records keyed by bridge type,
+direction, nonce, and (for tokens) both token contracts. They preserve distinct
+positive observations for settlement, distribution, claimability, claim,
+execution, and message type, each with its own chain/transaction/block position,
+contract, implementation and optional original result payload. A repeated
+observation is idempotent; contradictory evidence is rejected. Observations
+can arrive before the source operation. No legacy `op:*`, status index,
+completion timestamp, or destination transaction is migrated or rewritten.
+Missing sidecars and absent individual facts mean **unknown**.
+
+Separate `lifecycle_recovery:v1:*` manifests store each destination chain's
+watched contracts, implementation ranges, evidence paths, inclusive replay
+bounds, target hash, and contiguous watermark/hash. A block's observations and
+watermark can be committed together only in height and parent-hash order after
+the caller has verified all required evidence paths. This is a storage
+interface; the caller
+must actually verify block identity, receipt success, call traces, supported
+implementations, and decoded provenance. A target-complete manifest alone does
+not certify live coverage after cutover or enable any negative conclusion.
+
+No indexer invokes these new writes yet. The API, Swagger, frontend, legacy
+monitor and webhook logic are unchanged. The next decoder/recovery work must
+produce and validate the facts, atomically extend live coverage with its normal
+checkpoint, rehearse replay and cutover on a database copy, and only then
+enable the new projection and relay-stuck precedence. The silent Neo X token
+claim and both N3 execution payload forms remain decoder requirements.
+
 This document records the lifecycle contract adopted for backend issues [#28](https://github.com/bane-labs/bridge-indexer-backend/issues/28) and [#29](https://github.com/bane-labs/bridge-indexer-backend/issues/29), and frontend issues [#9](https://github.com/bane-labs/bridge-indexer-frontend/issues/9) and [#17](https://github.com/bane-labs/bridge-indexer-frontend/issues/17). It specifies the implementation to follow. The current operation API still exposes the legacy completion model.
 
 ## Contents
