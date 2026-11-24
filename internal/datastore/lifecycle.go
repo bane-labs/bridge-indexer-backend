@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
@@ -31,6 +32,9 @@ func (id OperationIdentity) key() (string, error) {
 	}
 	base := fmt.Sprintf("lifecycle:v1:%s:%s:%d", id.BridgeType, id.Direction, id.Nonce)
 	if id.BridgeType == types.BridgeTypeToken {
+		if strings.ContainsAny(id.SourceToken, ":\x00") || strings.ContainsAny(id.DestinationToken, ":\x00") {
+			return "", errors.New("token lifecycle contracts contain an invalid key separator")
+		}
 		if normalizeTokenKeyPart(id.SourceToken) == "unknown" || normalizeTokenKeyPart(id.DestinationToken) == "unknown" {
 			return "", errors.New("token lifecycle requires both token contracts")
 		}
@@ -115,6 +119,14 @@ func applyObservation(l *OperationLifecycle, o LifecycleObservation) error {
 		}
 		if o.Evidence.Chain != destination {
 			return errors.New("destination lifecycle evidence is on the wrong chain")
+		}
+	} else {
+		source := "neo_n3"
+		if o.Identity.Direction == types.DirectionWithdrawal {
+			source = "neo_x"
+		}
+		if o.Evidence.Chain != source {
+			return errors.New("message type evidence is on the wrong source chain")
 		}
 	}
 	var dst **LifecycleEvidence

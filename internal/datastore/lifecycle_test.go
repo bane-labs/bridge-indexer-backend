@@ -94,6 +94,11 @@ func TestLifecycleAtomicConflictsAndTokenPairs(t *testing.T) {
 	if _, err := os.GetLifecycle(OperationIdentity{BridgeType: id.BridgeType, Direction: id.Direction, Nonce: id.Nonce, SourceToken: "A"}); err == nil {
 		t.Fatal("ambiguous token identity accepted")
 	}
+	malformed := id
+	malformed.SourceToken = "A:B"
+	if _, err := os.GetLifecycle(malformed); err == nil {
+		t.Fatal("token identity with key separator accepted")
+	}
 	if err := os.ApplyLifecycleObservations([]LifecycleObservation{{id, FactExecution, lifecycleEvidence("neo_x", "wrong-chain", 21), ""}}); err == nil {
 		t.Fatal("wrong destination chain accepted")
 	}
@@ -106,6 +111,9 @@ func TestLifecycleMessageTypeAndUnknownHistory(t *testing.T) {
 		t.Fatalf("missing record must be unknown: %v", err)
 	}
 	source := lifecycleEvidence("neo_x", "send", 10)
+	if err := os.ApplyLifecycleObservations([]LifecycleObservation{{id, FactMessageType, lifecycleEvidence("neo_n3", "wrong-source", 10), "execute"}}); err == nil {
+		t.Fatal("destination evidence accepted as message source type")
+	}
 	if err := os.ApplyLifecycleObservations([]LifecycleObservation{{id, FactMessageType, source, "execute"}}); err != nil {
 		t.Fatal(err)
 	}
