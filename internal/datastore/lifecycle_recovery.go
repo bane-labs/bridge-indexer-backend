@@ -1,48 +1,76 @@
 package datastore
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	badger "github.com/dgraph-io/badger/v4"
 )
 
 const recoveryPrefix = "lifecycle_recovery:v1:"
 
-// RecoveryManifest describes a bounded replay on one destination chain.
-// NextHeight is the first height not yet verified; it starts at StartHeight.
-// No migration sets this record on an existing database: missing means unknown.
+// RecoveryTarget records one inclusive target of a recovery manifest. A
+// manifest keeps every target it has had, so a cutover extension is auditable.
+type RecoveryTarget struct {
+	Height uint64    `json:"height"`
+	Hash   string    `json:"hash"`
+	SetAt  time.Time `json:"set_at"`
+}
+
+// RecoveryManifest describes a bounded replay on one destination chain, in
+// that chain's own block heights. NextHeight is the first height not yet
+// committed; it starts at StartHeight. No migration creates this record on an
+// existing database: a missing manifest means coverage is unknown.
 type RecoveryManifest struct {
-	Chain                string   `json:"chain"`
-	WatchedContracts     []string `json:"watched_contracts"`
-	ImplementationRanges []string `json:"implementation_ranges"`
-	RequiredPaths        []string `json:"required_paths"` // e.g. logs, notifications, calls, traces
-	StartHeight          uint64   `json:"start_height"`
-	TargetHeight         uint64   `json:"target_height"`
-	TargetHash           string   `json:"target_hash"`
-	NextHeight           uint64   `json:"next_height"`
-	ContiguousHash       string   `json:"contiguous_hash,omitempty"`
-	LastBlockDigest      string   `json:"last_block_digest,omitempty"`
-	Unresolved           uint64   `json:"unresolved"`
+	Chain                string           `json:"chain"`
+	WatchedContracts     []string         `json:"watched_contracts"`
+	ImplementationRanges []string         `json:"implementation_ranges"`
+	RequiredPaths        []string         `json:"required_paths"` // see baseRecoveryPaths
+	StartHeight          uint64           `json:"start_height"`
+	TargetHeight         uint64           `json:"target_height"`
+	TargetHash           string           `json:"target_hash"`
+	Targets              []RecoveryTarget `json:"targets,omitempty"`
+	NextHeight           uint64           `json:"next_height"`
+	ContiguousHash       string           `json:"contiguous_hash,omitempty"`
+	LastBatchFrom        uint64           `json:"last_batch_from,omitempty"`
+	LastBatchDigest      string           `json:"last_batch_digest,omitempty"`
+	Batches              uint64           `json:"batches"`
+	Observations         uint64           `json:"observations"`
+	RecoveredOperations  uint64           `json:"recovered_operations"`
+}
+
+// baseRecoveryPaths are the evidence paths every committed range must have
+// verified. Neo X call traces are not among them: a block whose traces were
+// unavailable is committed with a claim trace gap, which keeps the interval
+// incomplete without stopping standard event recovery. Listing "traces" in a
+// manifest makes them mandatory instead.
+func baseRecoveryPaths(chain string) []string {
+	if chain == "neo_x" {
+		return []string{"blocks", "implementations", "logs", "transactions", "receipts", "claims"}
+	}
+	return []string{"blocks", "implementations", "notifications", "application_logs"}
+}
+
+// BaseRecoveryPaths returns the evidence paths a recovery of chain verifies.
+func BaseRecoveryPaths(chain string) []string { return baseRecoveryPaths(chain) }
+
+func validRecoveryChain(chain string) error {
+	if chain != "neo_n3" && chain != "neo_x" {
+		return fmt.Errorf("invalid recovery chain %q", chain)
+	}
+	return nil
 }
 
 func (m RecoveryManifest) valid() error {
-	if m.Chain != "neo_n3" && m.Chain != "neo_x" {
-		return fmt.Errorf("invalid recovery chain %q", m.Chain)
+	if err := validRecoveryChain(m.Chain); err != nil {
+		return err
 	}
 	if len(m.WatchedContracts) == 0 || len(m.ImplementationRanges) == 0 || len(m.RequiredPaths) == 0 || m.TargetHash == "" || m.StartHeight > m.TargetHeight || m.TargetHeight == ^uint64(0) {
 		return errors.New("recovery requires contracts, implementation ranges, evidence paths, and bounded target height/hash")
 	}
-	paths := []string{"blocks", "implementations"}
-	if m.Chain == "neo_x" {
-		paths = append(paths, "logs", "transactions", "receipts", "claims", "traces")
-	} else {
-		paths = append(paths, "notifications", "application_logs")
-	}
-	for _, path := range paths {
+	for _, path := range baseRecoveryPaths(m.Chain) {
 		if !slices.Contains(m.RequiredPaths, path) {
 			return fmt.Errorf("missing required recovery evidence path %q", path)
 		}
@@ -53,16 +81,16 @@ func (m RecoveryManifest) valid() error {
 	return nil
 }
 
-// VerifiedThroughTarget reports only recovery coverage through the captured
-// target. Continuous live coverage after cutover requires a separate writer
-// and is deliberately not implied by this method.
-func (m RecoveryManifest) VerifiedThroughTarget() bool {
-	return m.valid() == nil && m.NextHeight == m.TargetHeight+1 && m.ContiguousHash == m.TargetHash && m.Unresolved == 0
+// Contiguous reports that every height from StartHeight through the current
+// target was committed and the last one matches the captured target hash. It
+// says nothing about unresolved evidence; see RecoveryStatus.
+func (m RecoveryManifest) Contiguous() bool {
+	return m.valid() == nil && m.NextHeight == m.TargetHeight+1 && m.ContiguousHash == m.TargetHash
 }
 
 func (os *OperationStore) GetRecoveryManifest(chain string) (*RecoveryManifest, error) {
-	if chain != "neo_n3" && chain != "neo_x" {
-		return nil, errors.New("invalid recovery chain")
+	if err := validRecoveryChain(chain); err != nil {
+		return nil, err
 	}
 	var m RecoveryManifest
 	if err := os.store.Get(recoveryPrefix+chain, &m); err != nil {
@@ -74,36 +102,45 @@ func (os *OperationStore) GetRecoveryManifest(chain string) (*RecoveryManifest, 
 	return &m, nil
 }
 
+func readRecoveryManifest(txn *badger.Txn, chain string) (*RecoveryManifest, error) {
+	var m RecoveryManifest
+	if err := n3Read(txn, recoveryPrefix+chain, &m); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, errors.New("recovery manifest missing")
+		}
+		return nil, err
+	}
+	if err := m.valid(); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
 // BeginRecovery is idempotent for the same manifest, but refuses to replace
-// existing bounds or reset an advanced watermark silently.
+// existing bounds or reset an advanced watermark silently. A larger target
+// for an existing manifest goes through ExtendRecoveryTarget.
 func (os *OperationStore) BeginRecovery(m RecoveryManifest) error {
-	if m.NextHeight != m.StartHeight || m.ContiguousHash != "" || m.LastBlockDigest != "" || m.Unresolved != 0 {
+	if m.NextHeight != m.StartHeight || m.ContiguousHash != "" || m.LastBatchDigest != "" || m.Batches != 0 || len(m.Targets) > 0 {
 		return errors.New("new recovery must start with an empty watermark")
 	}
 	if err := m.valid(); err != nil {
 		return err
 	}
+	m.Targets = []RecoveryTarget{{Height: m.TargetHeight, Hash: m.TargetHash, SetAt: time.Now().UTC()}}
 	return retryLifecycleWrite(os.store.db, func(txn *badger.Txn) error {
-		key := []byte(recoveryPrefix + m.Chain)
-		item, err := txn.Get(key)
+		key := recoveryPrefix + m.Chain
+		var existing RecoveryManifest
+		err := n3Read(txn, key, &existing)
 		if err == nil {
-			var existing RecoveryManifest
-			if err := item.Value(func(v []byte) error { return json.Unmarshal(v, &existing) }); err != nil {
-				return err
-			}
 			if !sameRecoveryBounds(existing, m) {
-				return errors.New("recovery bounds changed; explicit reset and replay required")
+				return errors.New("recovery bounds changed; use extend for a later target, or an explicit reset and replay")
 			}
 			return nil
 		}
-		if !errors.Is(err, badger.ErrKeyNotFound) {
+		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
-		data, err := json.Marshal(m)
-		if err != nil {
-			return err
-		}
-		return txn.Set(key, data)
+		return n3Set(txn, key, m)
 	})
 }
 
@@ -111,122 +148,108 @@ func sameRecoveryBounds(a, b RecoveryManifest) bool {
 	return a.Chain == b.Chain && a.StartHeight == b.StartHeight && a.TargetHeight == b.TargetHeight && a.TargetHash == b.TargetHash && slices.Equal(a.WatchedContracts, b.WatchedContracts) && slices.Equal(a.ImplementationRanges, b.ImplementationRanges) && slices.Equal(a.RequiredPaths, b.RequiredPaths)
 }
 
-// RecordRecoveryUnresolved saves the number of unresolved observations at the
-// next uncommitted height without moving the watermark. A successful replay
-// of that height clears it in CommitRecoveryBlock.
-func (os *OperationStore) RecordRecoveryUnresolved(chain string, height, count uint64) error {
-	if chain != "neo_n3" && chain != "neo_x" {
-		return errors.New("invalid recovery chain")
+// ExtendRecoveryTarget raises the inclusive target, keeping all committed
+// progress. This is how replay catches up through blocks added after the
+// first target was captured, such as those between a database copy and the
+// production cutover. A target can never be lowered or re-hashed.
+func (os *OperationStore) ExtendRecoveryTarget(chain string, height uint64, hash string) error {
+	if hash == "" || height == ^uint64(0) {
+		return errors.New("recovery target requires a height and hash")
 	}
 	return retryLifecycleWrite(os.store.db, func(txn *badger.Txn) error {
-		key := []byte(recoveryPrefix + chain)
-		item, err := txn.Get(key)
-		if errors.Is(err, badger.ErrKeyNotFound) {
-			return ErrNotFound
-		}
+		m, err := readRecoveryManifest(txn, chain)
 		if err != nil {
 			return err
 		}
-		var m RecoveryManifest
-		if err := item.Value(func(v []byte) error { return json.Unmarshal(v, &m) }); err != nil {
-			return err
+		switch {
+		case height == m.TargetHeight && hash == m.TargetHash:
+			return nil
+		case height <= m.TargetHeight:
+			return fmt.Errorf("recovery target %d must exceed current target %d", height, m.TargetHeight)
 		}
-		if err := m.valid(); err != nil {
-			return err
-		}
-		if height != m.NextHeight || height > m.TargetHeight {
-			return errors.New("unresolved count must refer to next recovery height")
-		}
-		m.Unresolved = count
-		data, err := json.Marshal(m)
-		if err != nil {
-			return err
-		}
-		return txn.Set(key, data)
+		m.TargetHeight, m.TargetHash = height, hash
+		m.Targets = append(m.Targets, RecoveryTarget{Height: height, Hash: hash, SetAt: time.Now().UTC()})
+		return n3Set(txn, recoveryPrefix+chain, m)
 	})
 }
 
-// RecoveryBlock is a fully fetched and decoded destination block. The caller
-// must verify all required evidence paths and contract implementations before
-// advancing it. An unresolved claim or decoder error must not be advanced.
-type RecoveryBlock struct {
-	Chain         string
-	Height        uint64
-	Hash          string
-	ParentHash    string
-	VerifiedPaths []string
-	Unresolved    uint64
+// RecoveryStatus is the completion and handoff assessment of one chain.
+type RecoveryStatus struct {
+	Manifest RecoveryManifest `json:"manifest"`
+	// LiveCheckpoint is the normal indexer's last committed height, if any.
+	LiveCheckpoint *uint64 `json:"live_checkpoint,omitempty"`
+	// ClaimTraceGaps are Neo X blocks inside the recovery bounds whose
+	// indirect claims were not inspected.
+	ClaimTraceGaps      []NeoXClaimTraceGap `json:"claim_trace_gaps,omitempty"`
+	ClaimTraceGapBlocks uint64              `json:"claim_trace_gap_blocks"`
+	// UnresolvedClaims are N3 claims inside the bounds without a verified pair.
+	UnresolvedClaims int  `json:"unresolved_claims"`
+	Contiguous       bool `json:"contiguous"`
+	// Complete: every height in [start, target] is committed with no
+	// unresolved evidence. Only then can absence of an outcome in that
+	// interval be read as not executed.
+	Complete bool `json:"complete"`
+	// HandoffReady: Complete, and the live checkpoint is at or below the
+	// target, so the normal indexer resumes inside the verified interval and
+	// no block is left uncovered between recovery and live indexing.
+	HandoffReady bool     `json:"handoff_ready"`
+	Blocking     []string `json:"blocking,omitempty"`
 }
 
-// CommitRecoveryBlock atomically saves the block's observations and the
-// contiguous replay watermark. An exact retry of the most recently committed
-// block succeeds without advancing it; changed evidence or a skipped block fails.
-func (os *OperationStore) CommitRecoveryBlock(block RecoveryBlock, observations []LifecycleObservation) error {
-	input, err := json.Marshal(struct {
-		Block        RecoveryBlock
-		Observations []LifecycleObservation
-	}{block, observations})
+// RecoveryStatus derives completion from the manifest and the durable
+// unresolved-evidence records; nothing is trusted from a saved flag.
+func (os *OperationStore) RecoveryStatus(chain string) (*RecoveryStatus, error) {
+	m, err := os.GetRecoveryManifest(chain)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	digest := fmt.Sprintf("%x", sha256.Sum256(input))
-	return retryLifecycleWrite(os.store.db, func(txn *badger.Txn) error {
-		key := []byte(recoveryPrefix + block.Chain)
-		item, err := txn.Get(key)
-		if errors.Is(err, badger.ErrKeyNotFound) {
-			return errors.New("recovery manifest missing")
-		}
+	st := &RecoveryStatus{Manifest: *m, Contiguous: m.Contiguous()}
+	if !st.Contiguous {
+		st.Blocking = append(st.Blocking, fmt.Sprintf("replay committed through %d of target %d", int64(m.NextHeight)-1, m.TargetHeight))
+	}
+	if chain == "neo_x" {
+		gaps, err := os.store.NeoXClaimCoverageGaps(m.StartHeight, m.TargetHeight)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		var m RecoveryManifest
-		if err := item.Value(func(v []byte) error { return json.Unmarshal(v, &m) }); err != nil {
-			return err
+		for _, g := range gaps {
+			from, to := max(g.FromHeight, m.StartHeight), min(g.ToHeight, m.TargetHeight)
+			st.ClaimTraceGapBlocks += to - from + 1
 		}
-		if err := m.valid(); err != nil {
-			return err
+		st.ClaimTraceGaps = gaps
+		if len(gaps) > 0 {
+			st.Blocking = append(st.Blocking, fmt.Sprintf("%d blocks lack claim traces", st.ClaimTraceGapBlocks))
 		}
-		if m.NextHeight > m.StartHeight && block.Height == m.NextHeight-1 {
-			if block.Hash == m.ContiguousHash && digest == m.LastBlockDigest && m.Unresolved == 0 {
-				return nil
-			}
-			return errors.New("conflicting retry of last recovery block")
-		}
-		if block.Height != m.NextHeight || block.Height > m.TargetHeight || block.Hash == "" {
-			return errors.New("noncontiguous or invalid recovery block")
-		}
-		if block.Height == m.TargetHeight && block.Hash != m.TargetHash {
-			return errors.New("recovery target hash mismatch")
-		}
-		if block.Height > m.StartHeight && (block.ParentHash == "" || block.ParentHash != m.ContiguousHash) {
-			return errors.New("recovery parent hash mismatch")
-		}
-		for _, required := range m.RequiredPaths {
-			if !slices.Contains(block.VerifiedPaths, required) {
-				return fmt.Errorf("unverified evidence path %q", required)
-			}
-		}
-		if block.Unresolved != 0 {
-			return errors.New("unresolved evidence prevents recovery advancement")
-		}
-		for _, o := range observations {
-			if o.Evidence.Chain != block.Chain || o.Evidence.BlockHeight != block.Height || o.Evidence.BlockHash != block.Hash {
-				return errors.New("observation outside recovery block")
-			}
-		}
-		if err := writeLifecycleObservations(txn, observations); err != nil {
-			return err
-		}
-		m.NextHeight++
-		m.ContiguousHash = block.Hash
-		m.LastBlockDigest = digest
-		m.Unresolved = block.Unresolved
-		data, err := json.Marshal(m)
+	} else {
+		claims, err := os.store.ListUnresolvedN3TokenClaims()
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return txn.Set(key, data)
-	})
+		for _, c := range claims {
+			if c.Evidence.BlockHeight >= m.StartHeight && c.Evidence.BlockHeight <= m.TargetHeight {
+				st.UnresolvedClaims++
+			}
+		}
+		if st.UnresolvedClaims > 0 {
+			st.Blocking = append(st.Blocking, fmt.Sprintf("%d N3 claims lack a verified claimable pair", st.UnresolvedClaims))
+		}
+	}
+	st.Complete = st.Contiguous && st.ClaimTraceGapBlocks == 0 && st.UnresolvedClaims == 0
+	live, err := os.store.GetIndexerState(chain)
+	switch {
+	case err == nil:
+		h := live.LastBlockHeight
+		st.LiveCheckpoint = &h
+		if h > m.TargetHeight {
+			st.Blocking = append(st.Blocking, fmt.Sprintf("live checkpoint %d is beyond target %d; extend the target to at least %d", h, m.TargetHeight, h))
+		}
+	case errors.Is(err, ErrNotFound):
+		st.Blocking = append(st.Blocking, "no live checkpoint to hand off to")
+	default:
+		return nil, err
+	}
+	st.HandoffReady = st.Complete && st.LiveCheckpoint != nil && *st.LiveCheckpoint <= m.TargetHeight
+	return st, nil
 }
 
 func retryLifecycleWrite(db *badger.DB, fn func(*badger.Txn) error) error {

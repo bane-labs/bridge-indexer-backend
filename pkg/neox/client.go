@@ -114,6 +114,9 @@ func retryEVM[T any](c *Client, ctx context.Context, op func() (T, error)) (T, e
 			return val, nil
 		}
 		lastErr = err
+		if ctx.Err() != nil {
+			return zero, err // cancelled: retrying cannot succeed
+		}
 
 		if attempt < maxRetries {
 			backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
