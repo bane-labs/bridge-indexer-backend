@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -206,6 +207,7 @@ type fakeEventFilter struct {
 	pageLimit int                 // server-side result cap; negative means zero
 	queries   int
 	upstream  string // standard N3 methods are forwarded here
+	wrongHash bool   // answer getblockhash as a node on another chain
 }
 
 func (f *fakeEventFilter) serve(t *testing.T) *httptest.Server {
@@ -215,6 +217,10 @@ func (f *fakeEventFilter) serve(t *testing.T) *httptest.Server {
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		var probe struct{ Method string }
 		_ = json.Unmarshal(body, &probe)
+		if probe.Method == "getblockhash" && f.wrongHash {
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": "0x" + strings.Repeat("ab", 32)})
+			return
+		}
 		if probe.Method != "geteventfilterstatus" && probe.Method != "geteventfilterlogs" && f.upstream != "" {
 			res, err := http.Post(f.upstream, "application/json", bytes.NewReader(body))
 			if err != nil {

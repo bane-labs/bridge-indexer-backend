@@ -391,6 +391,25 @@ func TestRecoveryN3EventFilterLocator(t *testing.T) {
 			t.Fatalf("an empty-answering plugin was trusted: ops %+v, located %d", ops, m.LocatedBlocks)
 		}
 	})
+	t.Run("a plugin node on another chain is not used", func(t *testing.T) {
+		store, opStore := openRecoveryStore(t)
+		srv, _ := rpcServer(t, "", f.Exchanges[chainN3])
+		r := newFixtureRecoverer(t, chainN3, srv.URL, store, opStore)
+		filter := eventFilterFor("live")
+		filter.upstream = srv.URL
+		filter.wrongHash = true
+		useFakeEventFilter(t, r, filter)
+		if err := r.Begin(ctx, 13051516, 13051516, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Run(ctx, RecoveryRunOptions{Batch: 100}, nil); err != nil {
+			t.Fatal(err)
+		}
+		m, _ := opStore.GetRecoveryManifest("neo_n3")
+		if ops, _ := opStore.GetOperationsByNonce(27); len(ops) != 1 || m.LocatedBlocks != 0 || filter.queries == 0 {
+			t.Fatalf("mismatched node trusted: ops %+v, located %d, queries %d", ops, m.LocatedBlocks, filter.queries)
+		}
+	})
 	t.Run("a manifest that does not trust the index never uses it", func(t *testing.T) {
 		store, opStore := openRecoveryStore(t)
 		srv, _ := rpcServer(t, "", f.Exchanges[chainN3])

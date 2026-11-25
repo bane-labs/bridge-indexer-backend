@@ -1,6 +1,7 @@
 package n3
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -84,6 +85,14 @@ func TestEventFilterUsesOnlyThePluginEndpoint(t *testing.T) {
 	if h, err := f.BlockHash(context.Background(), 12); err != nil || h != fmt.Sprintf("%064x", 12) {
 		t.Fatalf("block hash: %s %v", h, err)
 	}
+	// A node that ran the plugin from genesis is the best case, not a failure.
+	genesis := pluginNode(t, true, map[string][]uint32{"0xaa": {12}}, 5)
+	genesis.Config.Handler = withLiveFrom(genesis.Config.Handler, 0)
+	if g, err := NewEventFilter(context.Background(), []string{genesis.URL}, logger); err != nil {
+		t.Fatal(err)
+	} else if err := g.Verify(context.Background(), []string{"aa"}); err != nil {
+		t.Fatalf("live index from genesis rejected: %v", err)
+	}
 	// A plugin with a zero result cap answers [] to everything: the control fails.
 	zero, err := NewEventFilter(context.Background(), []string{pluginNode(t, true, map[string][]uint32{"0xaa": {12}}, 0).URL}, logger)
 	if err != nil {
@@ -99,4 +108,22 @@ func TestEventFilterUsesOnlyThePluginEndpoint(t *testing.T) {
 	if err := f.Verify(context.Background(), []string{"bb"}); err == nil {
 		t.Fatal("listed event without a matching notification passed")
 	}
+}
+
+// withLiveFrom overrides liveIndexedFrom in geteventfilterstatus answers.
+func withLiveFrom(next http.Handler, from uint32) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if req.Method == "geteventfilterstatus" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"liveIndexedFrom": from, "lastIndexedBlock": 1000}})
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		next.ServeHTTP(w, r)
+	})
 }

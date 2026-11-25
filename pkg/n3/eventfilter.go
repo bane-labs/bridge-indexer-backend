@@ -128,7 +128,7 @@ func (f *EventFilter) Verify(ctx context.Context, contracts []string) error {
 	if err != nil {
 		return err
 	}
-	if st.LiveIndexedFrom == nil || *st.LiveIndexedFrom == 0 || st.LastIndexedBlock < *st.LiveIndexedFrom {
+	if st.LiveIndexedFrom == nil || st.LastIndexedBlock == 0 || st.LastIndexedBlock < *st.LiveIndexedFrom {
 		return errors.New("event filter has no live-indexed window")
 	}
 	for _, contract := range contracts {
