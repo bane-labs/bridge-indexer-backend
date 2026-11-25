@@ -79,7 +79,7 @@ func heightParam(raw json.RawMessage) uint64 {
 func (f *fakeNeoX) handle(method string, params []json.RawMessage) (any, map[string]any) {
 	switch method {
 	case "eth_blockNumber":
-		return "0x66", nil
+		return "0x67", nil
 	case "eth_getBlockByNumber":
 		b := f.blocks[heightParam(params[0])]
 		if b == nil {
@@ -154,6 +154,7 @@ func (f *fakeNeoX) handle(method string, params []json.RawMessage) (any, map[str
 }
 
 type optionalTraceFixture struct {
+	url      string
 	rpc      *fakeNeoX
 	idx      *NeoXIndexer
 	store    *datastore.Store
@@ -258,7 +259,7 @@ func newOptionalTraceFixture(t *testing.T, traceMode string) *optionalTraceFixtu
 	id := func(n uint64) datastore.OperationIdentity {
 		return datastore.OperationIdentity{BridgeType: types.BridgeTypeToken, Direction: types.DirectionDeposit, Nonce: n, SourceToken: src.Hex(), DestinationToken: dst.Hex()}
 	}
-	return &optionalTraceFixture{rpc: rpc, idx: idx, store: store, opStore: opStore, direct: id(7), indirect: id(8), rootTx: relay.Hash(), router: router.Hash()}
+	return &optionalTraceFixture{url: srv.URL, rpc: rpc, idx: idx, store: store, opStore: opStore, direct: id(7), indirect: id(8), rootTx: relay.Hash(), router: router.Hash()}
 }
 
 func (f *optionalTraceFixture) lifecycle(t *testing.T, id datastore.OperationIdentity) *datastore.OperationLifecycle {
