@@ -163,6 +163,14 @@ Run backfill mode:
 go run ./cmd/server backfill
 ```
 
+Recover historical lifecycle evidence and missing source operations (server stopped; see the [recovery runbook](docs/operation-lifecycle.md#recovery-command-and-runbook)):
+
+```bash
+go run ./cmd/server recover begin --chain neo_x --start <deploy height> --target checkpoint
+go run ./cmd/server recover run --chain neo_x --max-blocks 100000
+go run ./cmd/server recover status
+```
+
 Run live status dashboard:
 
 ```bash
