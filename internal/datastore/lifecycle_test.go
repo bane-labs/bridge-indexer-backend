@@ -163,3 +163,39 @@ func TestLifecycleConcurrentIndependentFacts(t *testing.T) {
 		t.Fatalf("concurrent facts lost: %+v, %v", got, err)
 	}
 }
+
+func TestLifecycleRetryEqualInstantAcrossLocations(t *testing.T) {
+	os := NewOperationStore(newTestStore(t), nil)
+	id := OperationIdentity{BridgeType: types.BridgeTypeToken, Direction: types.DirectionDeposit,
+		Nonce: 108, SourceToken: "0xabc", DestinationToken: "0xdef"}
+	e := lifecycleEvidence("neo_x", "claim", 50)
+	e.Kind, e.Implementation, e.Payload = "call", "0ximplementation", json.RawMessage(`{"nonce":108}`)
+	e.ObservedAt = time.Date(2026, 11, 25, 12, 30, 0, 0, time.UTC)
+	if err := os.ApplyLifecycleObservations([]LifecycleObservation{{Identity: id, Fact: FactClaim, Evidence: e}}); err != nil {
+		t.Fatal(err)
+	}
+	retry := e
+	retry.ObservedAt = e.ObservedAt.In(time.FixedZone("CET", 3600))
+	if err := os.ApplyLifecycleObservations([]LifecycleObservation{{Identity: id, Fact: FactClaim, Evidence: retry}}); err != nil {
+		t.Fatalf("identical claim rejected after JSON roundtrip: %v", err)
+	}
+	message := OperationIdentity{BridgeType: types.BridgeTypeMessage, Direction: types.DirectionWithdrawal, Nonce: 9}
+	source := lifecycleEvidence("neo_x", "message", 40)
+	if err := os.ApplyLifecycleObservations([]LifecycleObservation{{Identity: message, Fact: FactMessageType, Evidence: source, MessageType: "execute"}}); err != nil {
+		t.Fatal(err)
+	}
+	source.ObservedAt = source.ObservedAt.In(time.FixedZone("CET", 3600))
+	if err := os.ApplyLifecycleObservations([]LifecycleObservation{{Identity: message, Fact: FactMessageType, Evidence: source, MessageType: "execute"}}); err != nil {
+		t.Fatalf("identical message type rejected after JSON roundtrip: %v", err)
+	}
+	changed := retry
+	changed.Payload = json.RawMessage(`{"nonce":109}`)
+	if err := os.ApplyLifecycleObservations([]LifecycleObservation{{Identity: id, Fact: FactClaim, Evidence: changed}}); err == nil {
+		t.Fatal("different claim payload accepted")
+	}
+	changed = retry
+	changed.ObservedAt = retry.ObservedAt.Add(time.Nanosecond)
+	if err := os.ApplyLifecycleObservations([]LifecycleObservation{{Identity: id, Fact: FactClaim, Evidence: changed}}); err == nil {
+		t.Fatal("different claim instant accepted")
+	}
+}
