@@ -258,6 +258,8 @@ Before production, back up the database and rehearse migration and rollback on a
 
 Historical recovery supports Neo X and N3 **mainnet only**: `begin`, `run` and `claims` refuse any other network, because the version table, the claimable storage slot and the verified claim implementations are mainnet facts. Live indexing on other networks is unaffected.
 
+The network is a property of the whole endpoint list, not of one connection. The Neo X client asks every configured endpoint for `eth_chainId` at startup and refuses a list whose reachable endpoints disagree. It pins that chain ID, and a failover never switches to an endpoint that reports a different one or cannot report one. An endpoint unreachable at startup is checked when failover first reaches it. The N3 client checks the network magic of every pooled connection at startup; the pool never adds connections later. This applies to the server too: a mixed-network endpoint list stops it at startup instead of mixing two chains' data.
+
 `bridge-indexer recover` uses the server's configuration (`DB_PATH`, `NEO_N3_RPC_ENDPOINTS`, `NEOX_RPC_ENDPOINTS`, `N3_NEOX_BRIDGE`, `N3_MESSAGE_BRIDGE`, `NEOX_TOKEN_BRIDGE`, `NEOX_MESSAGE_BRIDGE`, `N3_SYNC_CONCURRENCY`, the RPC call intervals). Each chain has its own manifest and is replayed separately; one replay covers both roles of that chain, so the N3 replay recovers N3 source deposits and N3 destination evidence for withdrawals, and the Neo X replay the reverse.
 
 | Command | Effect |
