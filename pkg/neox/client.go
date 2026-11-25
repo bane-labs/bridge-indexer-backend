@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -16,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/bane-labs/bridge-indexer-backend/pkg/blockcache"
 )
@@ -28,7 +31,22 @@ type Client struct {
 	callInterval time.Duration
 	cache        *blockcache.Cache
 	cacheReads   bool
+
+	// traceUnsupported maps an endpoint URL to the time it may be probed
+	// again after reporting that debug tracing does not exist there.
+	traceMu          sync.Mutex
+	traceUnsupported map[string]time.Time
 }
+
+// ErrTraceUnsupported reports that the active endpoint does not provide
+// debug_traceBlockByNumber. It never applies to the other endpoints.
+var ErrTraceUnsupported = errors.New("debug_traceBlockByNumber unsupported by endpoint")
+
+const (
+	traceReprobeInterval = 10 * time.Minute
+	traceTimeout         = 45 * time.Second
+	rpcMethodNotFound    = -32601
+)
 
 // SetCache attaches an optional block cache. Cache reads are only enabled if
 // existing NeoX data is detected (from a previous run).
@@ -146,14 +164,43 @@ type TransactionTrace struct {
 	Error  string      `json:"error,omitempty"`
 }
 
-// TraceBlock returns one complete call tree per transaction. Missing or
-// unsupported debug tracing is an error; it cannot prove claim coverage.
+// TraceBlock returns one call tree per transaction from the active endpoint.
+// Tracing is optional enrichment: one attempt, no retry, and no failover, so
+// it can neither overload the endpoint nor move core indexing off it. An
+// endpoint answering -32601 is skipped until its re-probe time; that state is
+// keyed by endpoint URL, so another endpoint is still traced after failover.
 func (c *Client) TraceBlock(ctx context.Context, height uint64) ([]TransactionTrace, error) {
-	return retryEVM(c, ctx, func() ([]TransactionTrace, error) {
-		var traces []TransactionTrace
-		err := c.eth.Client().CallContext(ctx, &traces, "debug_traceBlockByNumber", hexutil.EncodeUint64(height), map[string]any{"tracer": "callTracer", "timeout": "30s"})
-		return traces, err
-	})
+	endpoint := c.endpoints[c.active]
+	c.traceMu.Lock()
+	until, known := c.traceUnsupported[endpoint]
+	c.traceMu.Unlock()
+	if known && time.Now().Before(until) {
+		return nil, ErrTraceUnsupported
+	}
+	ctx, cancel := context.WithTimeout(ctx, traceTimeout)
+	defer cancel()
+	var traces []TransactionTrace
+	err := c.eth.Client().CallContext(ctx, &traces, "debug_traceBlockByNumber", hexutil.EncodeUint64(height), map[string]any{"tracer": "callTracer", "timeout": "30s"})
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) && rpcErr.ErrorCode() == rpcMethodNotFound {
+		c.traceMu.Lock()
+		if c.traceUnsupported == nil {
+			c.traceUnsupported = make(map[string]time.Time)
+		}
+		c.traceUnsupported[endpoint] = time.Now().Add(traceReprobeInterval)
+		c.traceMu.Unlock()
+		if !known {
+			c.logger.Warn("Neo X endpoint does not support block tracing; indirect claim coverage is deferred", "endpoint", endpoint, "reprobe_after", traceReprobeInterval)
+		}
+		return nil, fmt.Errorf("%w: %v", ErrTraceUnsupported, err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	c.traceMu.Lock()
+	delete(c.traceUnsupported, endpoint)
+	c.traceMu.Unlock()
+	return traces, nil
 }
 
 func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {

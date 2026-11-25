@@ -26,11 +26,13 @@ enable any negative conclusion.
 
 The Neo X live indexer writes decoded destination events, Neo X message
 source types and verified direct and indirect silent token claims with its
-normal checkpoint. It verifies receipts and complete `debug_traceBlockByNumber`
-call trees; a missing trace prevents checkpoint advancement. Each successful
-indirect claim requires successful ancestors and a successful outer receipt.
-The configured Neo X RPC endpoints must support historical `callTracer` block
-traces. Only the verified historical silent-claim implementation is enabled;
+normal checkpoint. Blocks, receipts and watched events use standard RPC and
+are required: a failed fetch, malformed watched event, conflicting evidence or
+failed write prevents checkpoint advancement. `debug_traceBlockByNumber` call
+trees are optional enrichment, needed only for indirect claims (see
+[Neo X claim trace gaps](#neo-x-claim-trace-gaps)). Each successful indirect
+claim requires successful ancestors and a successful outer receipt. Only the
+verified historical silent-claim implementation is enabled;
 another implementation stops processing a correlated claim until verified.
 Claims without an observed earlier claimable retain unknown outcome and require
 historical recovery. The sole checked-in message bridge release artifact (v1.0.0)
@@ -143,6 +145,17 @@ For this implementation, require a successful receipt and an ABI-decoded call to
 Where the token emits a matching ERC-20 Transfer, retain its bridge sender, stored recipient, amount, and log position as corroborating evidence. A Transfer by itself cannot identify a claim nonce. A missing latest claimable record cannot identify the historical claim transaction. Neither is sufficient alone. For a different deployment version, use its verified claim implementation and emitted events. Accept `TokenClaim` only for a version known to emit it, and deduplicate event and call evidence from the same execution.
 
 Live processing and recovery must inspect successful transactions/calls as well as bridge-emitted logs. Cover indirect claims through traces or equivalent verified historical execution evidence. Unsupported implementation versions, missing required traces, and uncorrelated claims remain unresolved and block execution-coverage completion. They must not be classified `not_executed` merely because no `TokenClaim` was found.
+
+### Neo X claim trace gaps
+
+Normal indexing must work with standard RPC. A direct top-level `claimToken` call is fully established by the block's transaction, its successful receipt and the historical implementation lookup, so it is recorded without a trace. An indirect call is visible only in a call trace. When the active endpoint cannot trace a block, the indexer still commits that block's events, receipts and direct claims, and records the block in a `lifecycle_unresolved:v1:neo_x:claim_trace:<from>` range in the same transaction as the checkpoint. The range's reason is `trace_unsupported` (JSON-RPC -32601), `trace_unavailable` (request failed), or `trace_invalid` (trace inconsistent with the block). Blocks without transactions need no trace.
+
+- A gap means indirect claim outcomes in those blocks are unknown. Transaction success alone never establishes a claim, and a missing claim in a gap is never `not_executed`. `Store.NeoXClaimCoverageGaps(from, to)` must be empty, in addition to verified recovery coverage, before any negative claim conclusion for that interval.
+- The Neo X client sends one trace request per attempt, without retry or failover. A -32601 answer is cached for the responding endpoint URL only and re-probed every 10 minutes; another endpoint reached by failover is still traced. After one failed trace request, the rest of that range is recorded as a gap instead of retried.
+- While the live indexer is idle, it traces the lowest gap block, re-derives every claim in it with the same decoder, and atomically writes those observations and removes the block from the gap (`ResolveNeoXClaimTraceGap`). Failures keep the gap and back off for a minute. Enrichment never moves or resets the live checkpoint, and reapplying an already stored claim is idempotent. Gaps can be drained later by adding a tracing endpoint to `NEOX_RPC_ENDPOINTS`; no checkpoint reset or database wipe is needed.
+- The recovery manifest still requires the `traces` evidence path for Neo X, so a recovery block cannot be committed without it, and recovery must reconcile these gap records before certifying claim coverage, like the N3 unresolved claim records.
+
+A future enrichment source, such as a node-specific event plugin that reports `claimToken` calls, fits at the same point as the trace. It must report every successful bridge `claimToken` call in a block, with its call position and successful ancestors, so that it proves complete claim coverage for that block. It then feeds the same claim decoder and resolves the same gap records. A source that can only confirm some calls may add positive claim observations but cannot remove a gap. No source may become a prerequisite for advancing the normal checkpoint.
 
 The captured [successful token claim fixture](fixtures/neox-token-claim-without-event.json) contains the raw claim transaction, successful receipt, preceding root-update/claimable receipt, and historical EIP-1967 implementation lookup. It covers Neo X token `0xc28736dc83f4fd43d6fb832fd93c3ee7bb26828f`, nonce 108. The claim transaction `0xeba5f8409858a106934f567f9562e5ab9269835d938a6f64d0031a3ccfb04ab4` emits one token Transfer and zero bridge logs. Its sender differs from the claimable recipient. Tests must mark it executed, preserve settlement transaction `0xf81aeb05ae05142e69eb61414cfdfcc8b947ac0019357ce9dddb3d1fb64c29f3`, and link the claim transaction separately. Include negative variants for a reverted receipt, unrelated Transfer, mismatched token/nonce, and a failed ancestor call in an indirect claim trace. The implementation resolved for the fixture has verified source with the same silent `claimToken` behavior. [Historical implementation](https://xexplorer.neo.org/address/0x671bcb1b24e75a37adb283ffa509620c02eb35c6?tab=contract)
 
