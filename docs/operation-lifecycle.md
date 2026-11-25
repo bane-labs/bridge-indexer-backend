@@ -1,6 +1,6 @@
 # Settlement and execution
 
-## Implementation status: Neo X decoder batch
+## Implementation status: Neo X and Neo N3 decoder batches
 
 The datastore now has additive `lifecycle:v1:*` records keyed by bridge type,
 direction, nonce, and (for tokens) both token contracts. They preserve distinct
@@ -38,10 +38,16 @@ declares `Execution(uint256,(bool,bytes))`. No verified deployed ABI for the
 old indexer signature `Execution(uint256,uint8)` has been identified, so an
 observed event with that signature stops the checkpoint instead of interpreting
 it as the tuple. These limits mean the live checkpoint does **not** certify
-complete historical coverage. The API, Swagger, frontend, legacy monitor and
-webhook logic remain unchanged. N3 decoding, bounded historical recovery and
-verified cutover remain prerequisites to the public projection and relay-stuck
-precedence.
+complete historical coverage. The N3 live indexer now records received roots,
+distribution, claimability, emitted claims, and typed or chunked message
+execution atomically with its checkpoint and legacy updates. It fetches
+application logs for every transaction, including indirect calls. Missing logs,
+malformed watched notifications and token claims without a verified claimable
+pair stop the checkpoint. A received root replaces same-nonce synthetic
+destination state. The NEO withdrawal nonce 11 receipt remains unverified and
+is not included as a fixture. The API, Swagger, frontend, legacy monitor and
+webhook logic remain unchanged. Bounded historical recovery and verified
+cutover remain prerequisites to the public projection and relay-stuck precedence.
 
 This document records the lifecycle contract adopted for backend issues [#28](https://github.com/bane-labs/bridge-indexer-backend/issues/28) and [#29](https://github.com/bane-labs/bridge-indexer-backend/issues/29), and frontend issues [#9](https://github.com/bane-labs/bridge-indexer-frontend/issues/9) and [#17](https://github.com/bane-labs/bridge-indexer-frontend/issues/17). It specifies the implementation to follow. The current operation API still exposes the legacy completion model.
 

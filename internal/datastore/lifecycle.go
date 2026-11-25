@@ -208,7 +208,15 @@ func (os *OperationStore) GetLifecycle(id OperationIdentity) (*OperationLifecycl
 // FindClaimableTokenPair only resolves a claim when one previously observed
 // claimable identifies both sides of its token pair. Historical gaps stay unknown.
 func (os *OperationStore) FindClaimableTokenPair(nonce uint64, destinationToken string) (*OperationIdentity, error) {
-	prefix := fmt.Sprintf("lifecycle:v1:token:deposit:%d:", nonce)
+	return os.FindClaimableTokenPairForDirection(types.DirectionDeposit, nonce, destinationToken)
+}
+
+// FindClaimableTokenPairForDirection only uses verified claimable evidence.
+func (os *OperationStore) FindClaimableTokenPairForDirection(direction types.Direction, nonce uint64, destinationToken string) (*OperationIdentity, error) {
+	if direction != types.DirectionDeposit && direction != types.DirectionWithdrawal {
+		return nil, fmt.Errorf("invalid claim direction %q", direction)
+	}
+	prefix := fmt.Sprintf("lifecycle:v1:token:%s:%d:", direction, nonce)
 	var found *OperationIdentity
 	err := os.store.ScanPrefix(prefix, func(key string, value []byte) error {
 		parts := strings.Split(strings.TrimPrefix(key, prefix), ":")
@@ -225,7 +233,7 @@ func (os *OperationStore) FindClaimableTokenPair(nonce uint64, destinationToken 
 		if found != nil {
 			return errors.New("ambiguous token pair for claim")
 		}
-		found = &OperationIdentity{BridgeType: types.BridgeTypeToken, Direction: types.DirectionDeposit,
+		found = &OperationIdentity{BridgeType: types.BridgeTypeToken, Direction: direction,
 			Nonce: nonce, SourceToken: parts[0], DestinationToken: parts[1]}
 		return nil
 	})
