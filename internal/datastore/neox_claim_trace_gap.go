@@ -18,7 +18,20 @@ const neoxClaimTraceGapPrefix = "lifecycle_unresolved:v1:neo_x:claim_trace:"
 type NeoXClaimTraceGap struct {
 	FromHeight uint64 `json:"from_height"`
 	ToHeight   uint64 `json:"to_height"`
-	Reason     string `json:"reason"` // trace_unsupported, trace_unavailable, trace_invalid
+	Reason     string `json:"reason"` // trace_unsupported, trace_unavailable, trace_invalid, claims_deferred
+}
+
+// GapClaimsDeferred marks a range recovered from bridge logs only: no
+// transaction in it was inspected for a silent claimToken call. Claim
+// reconciliation (ReconcileNeoXClaims) can clear it.
+const GapClaimsDeferred = "claims_deferred"
+
+func validGapReason(reason string) bool {
+	switch reason {
+	case "trace_unsupported", "trace_unavailable", "trace_invalid", GapClaimsDeferred:
+		return true
+	}
+	return false
 }
 
 func neoxClaimTraceGapKey(from uint64) string {
@@ -28,7 +41,7 @@ func neoxClaimTraceGapKey(from uint64) string {
 func writeNeoXClaimTraceGaps(txn *badger.Txn, checkpoint uint64, gaps []NeoXClaimTraceGap) error {
 	for _, gap := range gaps {
 		if gap.FromHeight > gap.ToHeight || gap.ToHeight > checkpoint ||
-			(gap.Reason != "trace_unsupported" && gap.Reason != "trace_unavailable" && gap.Reason != "trace_invalid") {
+			!validGapReason(gap.Reason) {
 			return fmt.Errorf("invalid Neo X claim trace gap %+v", gap)
 		}
 		key := neoxClaimTraceGapKey(gap.FromHeight)

@@ -46,16 +46,20 @@ type RecoveryManifest struct {
 	// LocatedBlocks counts committed blocks covered through TrustedIndex
 	// rather than fetched individually.
 	LocatedBlocks uint64 `json:"located_blocks,omitempty"`
+	// Claims is the last Neo X claim reconciliation, if any.
+	Claims *ClaimReconciliationSummary `json:"claims,omitempty"`
 }
 
 // baseRecoveryPaths are the evidence paths every committed range must have
-// verified. Neo X call traces are not among them: a block whose traces were
-// unavailable is committed with a claim trace gap, which keeps the interval
-// incomplete without stopping standard event recovery. Listing "traces" in a
+// verified. On Neo X these are the bridge logs and their receipts. Claim
+// coverage is tracked separately: a range that did not inspect transactions
+// for silent claims ("transactions", "claims") carries a claims_deferred gap,
+// and a block without traces a trace gap; both keep the interval incomplete
+// without stopping event recovery. Listing "claims" or "traces" in a
 // manifest makes them mandatory instead.
 func baseRecoveryPaths(chain string) []string {
 	if chain == "neo_x" {
-		return []string{"blocks", "implementations", "logs", "transactions", "receipts", "claims"}
+		return []string{"blocks", "implementations", "logs", "receipts"}
 	}
 	return []string{"blocks", "implementations", "notifications", "application_logs"}
 }
@@ -189,9 +193,13 @@ type RecoveryStatus struct {
 	// indirect claims were not inspected.
 	ClaimTraceGaps      []NeoXClaimTraceGap `json:"claim_trace_gaps,omitempty"`
 	ClaimTraceGapBlocks uint64              `json:"claim_trace_gap_blocks"`
-	// UnresolvedClaims are N3 claims inside the bounds without a verified pair.
-	UnresolvedClaims int  `json:"unresolved_claims"`
-	Contiguous       bool `json:"contiguous"`
+	// UnresolvedClaims are N3 claims inside the bounds without a verified
+	// pair, or Neo X token claimables consumed by an unidentified claim.
+	UnresolvedClaims int `json:"unresolved_claims"`
+	// ClaimsDeferredBlocks are Neo X blocks recovered from bridge logs only
+	// (part of ClaimTraceGapBlocks): run claim reconciliation.
+	ClaimsDeferredBlocks uint64 `json:"claims_deferred_blocks"`
+	Contiguous           bool   `json:"contiguous"`
 	// Complete: every height in [start, target] is committed with no
 	// unresolved evidence. Only then can absence of an outcome in that
 	// interval be read as not executed.
@@ -225,10 +233,24 @@ func (os *OperationStore) RecoveryStatus(chain string) (*RecoveryStatus, error) 
 		for _, g := range gaps {
 			from, to := max(g.FromHeight, m.StartHeight), min(g.ToHeight, m.TargetHeight)
 			st.ClaimTraceGapBlocks += to - from + 1
+			if g.Reason == GapClaimsDeferred {
+				st.ClaimsDeferredBlocks += to - from + 1
+			}
 		}
 		st.ClaimTraceGaps = gaps
-		if len(gaps) > 0 {
-			st.Blocking = append(st.Blocking, fmt.Sprintf("%d blocks lack claim traces", st.ClaimTraceGapBlocks))
+		if st.ClaimsDeferredBlocks > 0 {
+			st.Blocking = append(st.Blocking, fmt.Sprintf("%d blocks recovered from bridge logs only; run claim reconciliation", st.ClaimsDeferredBlocks))
+		}
+		if traced := st.ClaimTraceGapBlocks - st.ClaimsDeferredBlocks; traced > 0 {
+			st.Blocking = append(st.Blocking, fmt.Sprintf("%d blocks lack claim traces", traced))
+		}
+		unresolved, err := os.store.ListUnresolvedNeoXTokenClaims()
+		if err != nil {
+			return nil, err
+		}
+		st.UnresolvedClaims = len(unresolved)
+		if st.UnresolvedClaims > 0 {
+			st.Blocking = append(st.Blocking, fmt.Sprintf("%d Neo X token claimables were consumed by an unidentified claim", st.UnresolvedClaims))
 		}
 	} else {
 		claims, err := os.store.ListUnresolvedN3TokenClaims()

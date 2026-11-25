@@ -121,6 +121,11 @@ func (os *OperationStore) CommitRecoveryRange(r RecoveryRange, b RecoveryBatch) 
 		if r.LocatedBy != "" && r.LocatedBy != m.TrustedIndex {
 			return fmt.Errorf("range located by %q, but the manifest trusts %q", r.LocatedBy, m.TrustedIndex)
 		}
+		if r.Chain == "neo_x" && !slices.Contains(r.VerifiedPaths, "claims") {
+			if len(b.TraceGaps) != 1 || b.TraceGaps[0] != (NeoXClaimTraceGap{FromHeight: r.From, ToHeight: r.To, Reason: GapClaimsDeferred}) {
+				return errors.New("a range not scanned for claims must record its whole span as claims_deferred")
+			}
+		}
 		if slices.Contains(m.RequiredPaths, "traces") && len(b.TraceGaps) > 0 {
 			return errors.New("manifest requires traces but the range has claim trace gaps")
 		}
@@ -241,7 +246,7 @@ func validateRecoveryBatch(r RecoveryRange, b RecoveryBatch) error {
 		if r.Chain != "neo_x" || g.FromHeight > g.ToHeight || g.FromHeight < r.From || g.ToHeight > r.To {
 			return errors.New("claim trace gap outside recovery range")
 		}
-		if g.Reason != "trace_unsupported" && g.Reason != "trace_unavailable" && g.Reason != "trace_invalid" {
+		if !validGapReason(g.Reason) {
 			return fmt.Errorf("invalid claim trace gap reason %q", g.Reason)
 		}
 	}
