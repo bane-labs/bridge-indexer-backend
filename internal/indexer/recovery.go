@@ -65,6 +65,16 @@ type Recoverer struct {
 // trusted index. Only its live-indexed window is ever used.
 const EventFilterIndex = "axlabs/neo-event-filter-plugin live index"
 
+// ScanClaims makes a Neo X recovery fetch every block of each range and
+// inspect its transactions (and traces, when available) for silent
+// claimToken calls, as live indexing does, instead of deferring claims to
+// ReconcileClaims. It is far slower: every block is fetched.
+func (r *Recoverer) ScanClaims(scan bool) {
+	if r.neox != nil {
+		r.neox.deferClaims = !scan
+	}
+}
+
 // UseEventFilter lets an N3 recovery whose manifest trusts EventFilterIndex
 // fetch only the blocks the plugin lists inside its live-indexed window.
 func (r *Recoverer) UseEventFilter(f *n3.EventFilter) { r.filter = f }
@@ -73,6 +83,9 @@ func (r *Recoverer) UseEventFilter(f *n3.EventFilter) { r.filter = f }
 type RecoveryRunOptions struct {
 	Batch     uint64 // blocks per committed range
 	MaxBlocks uint64 // stop after this many blocks; 0 = through the target
+	// MinLogsSpan is the smallest Neo X range an eth_getLogs failure shrinks
+	// to (default 1000).
+	MinLogsSpan uint64
 	// LocatedBatch is the range size when blocks are located through the
 	// event filter (default 10000).
 	LocatedBatch uint64
@@ -91,6 +104,8 @@ func NewNeoXRecoverer(client *neox.Client, store *datastore.Store, opStore *data
 	proc := NewNeoXEventProcessor(recorded, tokenBridge, messageBridge, logger)
 	idx := NewNeoXIndexer(client, store, opStore, nil, proc, contracts, 0, 1, logger, nil)
 	idx.blockFetchConcurrency = concurrency
+	idx.headerFetchConcurrency = max(concurrency, 1)
+	idx.deferClaims = true // event-only by default; see ScanClaims
 	return &Recoverer{chain: chainNeoX, opStore: opStore, contracts: contracts, logger: logger, neox: idx, recorded: recorded}
 }
 
@@ -107,6 +122,25 @@ func NewN3Recoverer(client *n3.Client, store *datastore.Store, opStore *datastor
 		return nil, err
 	}
 	return &Recoverer{chain: chainN3, opStore: opStore, contracts: contracts, logger: logger, n3: idx, n3Workers: idx.blockWorkerCount(), recorded: recorded}, nil
+}
+
+// requireMainnet refuses another network: recovery's version table,
+// claimable storage slot and claim implementations are mainnet facts.
+func (r *Recoverer) requireMainnet(ctx context.Context) error {
+	if r.neox != nil {
+		if ok, err := r.neox.isMainnet(ctx); err != nil {
+			return err
+		} else if !ok {
+			return errNotMainnet(r.chain, r.neox.chainID, mainnetNeoXChainID)
+		}
+		return nil
+	}
+	if ok, err := r.n3.isMainnet(ctx); err != nil {
+		return err
+	} else if !ok {
+		return errNotMainnet(r.chain, uint64(r.n3.network), uint64(mainnetN3Network))
+	}
+	return nil
 }
 
 // Chain returns the chain this recoverer replays.
@@ -174,6 +208,9 @@ func (r *Recoverer) Begin(ctx context.Context, start, target uint64, trustIndex 
 	if start > target {
 		return fmt.Errorf("start %d is after target %d", start, target)
 	}
+	if err := r.requireMainnet(ctx); err != nil {
+		return err
+	}
 	hash, err := r.ResolveTarget(ctx, target)
 	if err != nil {
 		return err
@@ -201,7 +238,8 @@ func (r *Recoverer) Extend(ctx context.Context, target uint64) error {
 func (r *Recoverer) implementations() []string {
 	if r.chain == chainNeoX {
 		return []string{
-			"claimToken implementation " + verifiedClaimImplementation.Hex() + " (others stop the range)",
+			"claimToken implementations 1.0.0 0x1212100000000000000000000000000000000004, 2.0.0 0xb72c01360c20e03e315dccca46804735ab99d3d4, 3.0.0 " + verifiedClaimImplementation.Hex() + " (others stop the range)",
+			"native bridge events Gas* before 1,772,382, Native* from it; MessageBridge events only from 4,721,793",
 			"message Execution(uint256,(bool,bytes)); Execution(uint256,uint8) stops the range",
 		}
 	}
@@ -240,6 +278,14 @@ func (r *Recoverer) Run(ctx context.Context, opts RecoveryRunOptions, report fun
 	if !slices.Equal(m.WatchedContracts, r.contracts) {
 		return fmt.Errorf("configured contracts %v differ from manifest %v", r.contracts, m.WatchedContracts)
 	}
+	if err := r.requireMainnet(ctx); err != nil {
+		return err
+	}
+	if r.neox != nil && r.neox.deferClaims && (slices.Contains(m.RequiredPaths, "claims") || slices.Contains(m.RequiredPaths, "transactions")) {
+		// A manifest created before event-only recovery requires every
+		// range to be scanned for claims; its paths cannot change in place.
+		return errors.New("this Neo X manifest requires per-block claim scanning (created by an earlier version): continue it with --claim-scan, or start a new manifest on a fresh database copy")
+	}
 	// The captured target binds the manifest to this chain and its history.
 	hash, _, err := r.blockHash(ctx, m.TargetHeight)
 	if err != nil {
@@ -264,12 +310,21 @@ func (r *Recoverer) Run(ctx context.Context, opts RecoveryRunOptions, report fun
 	}
 	var done uint64
 	start := time.Now()
+	// Event-only Neo X ranges adapt to the RPC: an eth_getLogs failure halves
+	// the range (the attempt commits nothing), successes grow it back.
+	logsSpan := opts.Batch
+	if opts.MinLogsSpan == 0 {
+		opts.MinLogsSpan = 1000
+	}
 	for m.NextHeight <= m.TargetHeight && (opts.MaxBlocks == 0 || done < opts.MaxBlocks) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		from := m.NextHeight
 		span := min(opts.Batch, m.TargetHeight-from+1) // no overflow: from <= target
+		if r.neox != nil && r.neox.deferClaims {
+			span = min(span, logsSpan)
+		}
 		limit := m.TargetHeight
 		if opts.MaxBlocks > 0 {
 			span = min(span, opts.MaxBlocks-done)
@@ -292,8 +347,17 @@ func (r *Recoverer) Run(ctx context.Context, opts RecoveryRunOptions, report fun
 		} else {
 			rng, batch, err = r.replay(ctx, from, to)
 		}
+		var logsErr filterLogsError
+		if errors.As(err, &logsErr) && r.neox != nil && r.neox.deferClaims && span > opts.MinLogsSpan {
+			logsSpan = max(span/2, opts.MinLogsSpan)
+			r.logger.Warn("eth_getLogs failed; retrying a smaller range", "from", from, "to", to, "next_span", logsSpan, "error", err)
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("%s recovery %d-%d: %w", r.chain, from, to, err)
+		}
+		if r.neox != nil && r.neox.deferClaims && logsSpan < opts.Batch {
+			logsSpan = min(logsSpan*2, opts.Batch)
 		}
 		if opts.StuckAfter != nil {
 			now := time.Now()
@@ -430,8 +494,11 @@ func (r *Recoverer) replay(ctx context.Context, from, to uint64) (datastore.Reco
 		if err != nil {
 			return datastore.RecoveryRange{}, datastore.RecoveryBatch{}, err
 		}
-		if len(gaps) == 0 {
-			paths = append(paths, "traces")
+		if !r.neox.deferClaims {
+			paths = append(paths, "transactions", "claims")
+			if len(gaps) == 0 {
+				paths = append(paths, "traces")
+			}
 		}
 		return datastore.RecoveryRange{Chain: r.chain, From: from, To: to, FromParentHash: parent, ToHash: state.LastBlockHash, VerifiedPaths: paths},
 			datastore.RecoveryBatch{Observations: observations, Operations: ops, TraceGaps: gaps, LegacyCompletions: completions}, nil

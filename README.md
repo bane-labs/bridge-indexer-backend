@@ -166,8 +166,9 @@ go run ./cmd/server backfill
 Recover historical lifecycle evidence and missing source operations (server stopped; see the [recovery runbook](docs/operation-lifecycle.md#recovery-command-and-runbook)):
 
 ```bash
-go run ./cmd/server recover begin --chain neo_x --start <deploy height> --target checkpoint
-go run ./cmd/server recover run --chain neo_x --max-blocks 100000
+go run ./cmd/server recover begin --chain neo_x --start 0 --target checkpoint
+go run ./cmd/server recover run --chain neo_x      # bridge logs only; claims deferred
+go run ./cmd/server recover claims --chain neo_x   # reconcile silent token claims
 go run ./cmd/server recover status
 ```
 

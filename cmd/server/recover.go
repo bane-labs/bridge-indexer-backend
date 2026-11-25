@@ -34,6 +34,7 @@ var recoverFlags struct {
 	conc      int
 	filter    bool
 	located   uint64
+	scan      bool
 }
 
 // newRecoverCommand is the historical lifecycle recovery tool. It opens the
@@ -79,10 +80,18 @@ named chain. The live checkpoint is never changed. See docs/operation-lifecycle.
 		RunE:  func(cmd *cobra.Command, _ []string) error { return withRecoverer(cmd, runRecoverRun) },
 	}
 	chainFlag(run)
-	run.Flags().Uint64Var(&recoverFlags.batch, "batch", 0, "blocks per committed range (default 250 on neo_x, 100 on neo_n3)")
+	run.Flags().Uint64Var(&recoverFlags.batch, "batch", 0, "blocks per committed range (default 100000 on neo_x, 250 with --claim-scan, 100 on neo_n3); eth_getLogs failures halve it")
 	run.Flags().Uint64Var(&recoverFlags.maxBlocks, "max-blocks", 0, "stop after this many blocks (0 = through the target)")
+	run.Flags().BoolVar(&recoverFlags.scan, "claim-scan", false, "neo_x: fetch every block and scan it for silent claims instead of deferring claims to 'recover claims' (slow)")
 	run.Flags().Uint64Var(&recoverFlags.located, "located-batch", 10000, "neo_n3 with --event-filter: blocks per range located through the plugin")
 	run.Flags().IntVar(&recoverFlags.conc, "concurrency", 1, "neo_x: parallel block fetches per range; raise only for a dedicated node (public nodes rate-limit)")
+
+	claims := &cobra.Command{
+		Use:   "claims",
+		Short: "neo_x: reconcile silent token claims through the committed height from contract state",
+		RunE:  func(cmd *cobra.Command, _ []string) error { return withRecoverer(cmd, runRecoverClaims) },
+	}
+	chainFlag(claims)
 
 	status := &cobra.Command{
 		Use:   "status",
@@ -92,7 +101,7 @@ named chain. The live checkpoint is never changed. See docs/operation-lifecycle.
 	status.Flags().StringVar(&recoverFlags.chain, "chain", "", "neo_x or neo_n3 (default both)")
 	status.Flags().BoolVar(&recoverFlags.json, "json", false, "print JSON")
 
-	cmd.AddCommand(begin, extend, run, status)
+	cmd.AddCommand(begin, extend, run, claims, status)
 	return cmd
 }
 
@@ -201,11 +210,16 @@ func runRecoverExtend(e *recoverEnv) error {
 func runRecoverRun(e *recoverEnv) error {
 	batch := recoverFlags.batch
 	if batch == 0 {
-		batch = 250
-		if recoverFlags.chain == "neo_n3" {
+		switch {
+		case recoverFlags.chain == "neo_n3":
 			batch = 100
+		case recoverFlags.scan:
+			batch = 250
+		default:
+			batch = 100000
 		}
 	}
+	e.rec.ScanClaims(recoverFlags.scan)
 	var blocks uint64
 	thresholds := monitor.StuckThresholds{Default: e.cfg.StuckThreshold, Native: e.cfg.StuckThresholdNative, Token: e.cfg.StuckThresholdToken, Message: e.cfg.StuckThresholdMessage}
 	opts := indexer.RecoveryRunOptions{Batch: batch, MaxBlocks: recoverFlags.maxBlocks, LocatedBatch: recoverFlags.located, StuckAfter: thresholds.ForBridgeType}
@@ -232,6 +246,16 @@ func runRecoverRun(e *recoverEnv) error {
 	} else if err != nil {
 		return err
 	}
+	return printRecoveryStatus(e.opStore, recoverFlags.chain)
+}
+
+func runRecoverClaims(e *recoverEnv) error {
+	summary, err := e.rec.ReconcileClaims(e.ctx)
+	if err != nil {
+		return err
+	}
+	e.logger.Info("Claim reconciliation committed", "through", summary.Through, "claims_identified", summary.Claims,
+		"outstanding", summary.Outstanding, "unresolved", summary.Unresolved, "claim_gaps_cleared", summary.GapsCleared)
 	return printRecoveryStatus(e.opStore, recoverFlags.chain)
 }
 
@@ -279,6 +303,13 @@ func printRecoveryStatus(opStore *datastore.OperationStore, chain string) error 
 	fmt.Printf("%s: start %d, target %d (%s), committed through %d, live checkpoint %s\n", chain, m.StartHeight, m.TargetHeight, m.TargetHash, int64(m.NextHeight)-1, live)
 	fmt.Printf("  ranges %d, observations %d, recovered operations %d, claim-trace gap blocks %d, unresolved N3 claims %d\n",
 		m.Batches, m.Observations, m.RecoveredOperations, st.ClaimTraceGapBlocks, st.UnresolvedClaims)
+	if st.ClaimsDeferredBlocks > 0 || m.Claims != nil {
+		fmt.Printf("  claims deferred over %d blocks", st.ClaimsDeferredBlocks)
+		if c := m.Claims; c != nil {
+			fmt.Printf("; last reconciliation through %d: %d identified, %d outstanding, %d unresolved, gaps cleared %t", c.Through, c.Claims, c.Outstanding, c.Unresolved, c.GapsCleared)
+		}
+		fmt.Println()
+	}
 	if m.TrustedIndex != "" {
 		fmt.Printf("  trusted index: %s; %d blocks covered through it, not fetched\n", m.TrustedIndex, m.LocatedBlocks)
 	}

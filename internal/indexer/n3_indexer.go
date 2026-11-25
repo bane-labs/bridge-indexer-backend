@@ -34,6 +34,30 @@ type N3Indexer struct {
 	startBlock       uint64
 	concurrency      int
 	logger           *slog.Logger
+	// network is learned once from the node; the mainnet version rules
+	// apply only on N3 mainnet.
+	networkMu sync.Mutex
+	network   uint32
+}
+
+// isMainnet reports whether the connected chain is N3 mainnet.
+func (idx *N3Indexer) isMainnet(ctx context.Context) (bool, error) {
+	idx.networkMu.Lock()
+	defer idx.networkMu.Unlock()
+	if idx.network == 0 {
+		n, err := idx.client.Network(ctx)
+		if err != nil {
+			return false, fmt.Errorf("N3 network: %w", err)
+		}
+		idx.network = n
+	}
+	return idx.network == mainnetN3Network, nil
+}
+
+func (idx *N3Indexer) mainnetRules() bool {
+	idx.networkMu.Lock()
+	defer idx.networkMu.Unlock()
+	return idx.network == mainnetN3Network
 }
 
 type n3BlockResult struct {
@@ -362,6 +386,9 @@ func (idx *N3Indexer) processBlockWithResult(ctx context.Context, height uint32)
 }
 
 func (idx *N3Indexer) processBlockWithLifecycle(ctx context.Context, height uint32) (*types.IndexerState, []*types.BridgeOperation, []datastore.LifecycleObservation, error) {
+	if _, err := idx.isMainnet(ctx); err != nil {
+		return nil, nil, nil, err
+	}
 	blk, err := idx.client.GetBlockByIndex(ctx, height)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("get block %d: %w", height, err)
@@ -457,7 +484,10 @@ func (idx *N3Indexer) decodeN3Executions(executions []state.Execution, height ui
 			if idx.processor == nil {
 				continue
 			}
-			if event.ScriptHash.Equals(idx.processor.neoXBridge) && (event.Name == "NativeDeposit" || event.Name == "TokenDeposit") ||
+			if err := checkN3NotificationVersion(idx.mainnetRules(), event.ScriptHash.StringLE(), event.Name, uint64(height)); err != nil {
+				return nil, nil, fmt.Errorf("%s in %s: %w", event.Name, txHash, err)
+			}
+			if event.ScriptHash.Equals(idx.processor.neoXBridge) && (event.Name == "NativeDeposit" || event.Name == "GasDeposit" || event.Name == "TokenDeposit") ||
 				event.ScriptHash.Equals(idx.processor.messageBridge) && event.Name == "MessageSend" {
 				op, err := idx.processor.ProcessEvent(event, height, txHash, blockTime)
 				if err != nil {

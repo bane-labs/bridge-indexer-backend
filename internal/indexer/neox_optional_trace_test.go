@@ -34,6 +34,13 @@ type fakeNeoX struct {
 	receipts    map[common.Hash]*ethtypes.Receipt
 	traces      map[common.Hash]*neox.CallFrame // non-default trace roots
 	calls       map[string]int
+	// storage answers eth_getStorageAt for slots other than the EIP-1967
+	// implementation slot, by height.
+	storage map[common.Hash]func(height uint64) common.Hash
+	// maxLogsRange, when set, fails eth_getLogs over more blocks.
+	maxLogsRange uint64
+	// chainID answers eth_chainId (default mainnet).
+	chainID string
 }
 
 func (f *fakeNeoX) setTraceMode(mode string) {
@@ -80,6 +87,11 @@ func (f *fakeNeoX) handle(method string, params []json.RawMessage) (any, map[str
 	switch method {
 	case "eth_blockNumber":
 		return "0x67", nil
+	case "eth_chainId":
+		if f.chainID != "" {
+			return f.chainID, nil
+		}
+		return "0xba93", nil
 	case "eth_getBlockByNumber":
 		b := f.blocks[heightParam(params[0])]
 		if b == nil {
@@ -110,6 +122,9 @@ func (f *fakeNeoX) handle(method string, params []json.RawMessage) (any, map[str
 		_ = json.Unmarshal(params[0], &q)
 		from, _ := strconv.ParseUint(strings.TrimPrefix(q.FromBlock, "0x"), 16, 64)
 		to, _ := strconv.ParseUint(strings.TrimPrefix(q.ToBlock, "0x"), 16, 64)
+		if f.maxLogsRange > 0 && to-from+1 > f.maxLogsRange {
+			return nil, map[string]any{"code": -32005, "message": "query exceeds max block range"}
+		}
 		logs := []*ethtypes.Log{}
 		for h := from; h <= to; h++ {
 			if b := f.blocks[h]; b != nil {
@@ -131,6 +146,11 @@ func (f *fakeNeoX) handle(method string, params []json.RawMessage) (any, map[str
 		}
 		return f.receipts[h], nil
 	case "eth_getStorageAt":
+		var slot common.Hash
+		_ = json.Unmarshal(params[1], &slot)
+		if fn, ok := f.storage[slot]; ok {
+			return fn(heightParam(params[2])), nil
+		}
 		return common.BytesToHash(common.HexToAddress("0x671bcb1b24e75a37adb283ffa509620c02eb35c6").Bytes()), nil
 	case "debug_traceBlockByNumber":
 		switch f.traceMode {
@@ -186,7 +206,7 @@ func newOptionalTraceFixture(t *testing.T, traceMode string) *optionalTraceFixtu
 	dst := common.HexToAddress("0xc28736dc83f4fd43d6fb832fd93c3ee7bb26828f")
 	recipient := common.HexToAddress("0xce0c7fbe9c64bc4b1bdc1436f2fe8e795dd01e90")
 	routerAddr := common.HexToAddress("0x5555")
-	rpc := &fakeNeoX{traceMode: traceMode, blocks: map[uint64]*ethtypes.Block{}, receipts: map[common.Hash]*ethtypes.Receipt{}, traces: map[common.Hash]*neox.CallFrame{}, calls: map[string]int{}}
+	rpc := &fakeNeoX{traceMode: traceMode, blocks: map[uint64]*ethtypes.Block{}, receipts: map[common.Hash]*ethtypes.Receipt{}, traces: map[common.Hash]*neox.CallFrame{}, calls: map[string]int{}, storage: map[common.Hash]func(uint64) common.Hash{}}
 
 	tx := func(nonce uint64, to common.Address, data []byte) *ethtypes.Transaction {
 		return ethtypes.NewTx(&ethtypes.LegacyTx{Nonce: nonce, To: &to, Gas: 100000, GasPrice: big.NewInt(1), Value: big.NewInt(0), Data: data})
@@ -208,7 +228,15 @@ func newOptionalTraceFixture(t *testing.T, traceMode string) *optionalTraceFixtu
 		router.Hash(): {{Address: dst, Topics: []common.Hash{sigERC20Transfer, padAddress(bridge), padAddress(recipient)}, Data: amount}},
 	}
 	status := map[common.Hash]uint64{reverted.Hash(): ethtypes.ReceiptStatusFailed}
+	// An empty, linked chain from genesis, so ranges can start at 0.
 	parent := common.Hash{}
+	for h := uint64(0); h < 100; h++ {
+		header := &ethtypes.Header{ParentHash: parent, UncleHash: ethtypes.EmptyUncleHash, TxHash: ethtypes.EmptyTxsHash, ReceiptHash: ethtypes.EmptyReceiptsHash,
+			Difficulty: big.NewInt(0), Number: new(big.Int).SetUint64(h), GasLimit: 30000000, Time: 1700000000 + h, Extra: []byte{}}
+		block := ethtypes.NewBlockWithHeader(header)
+		rpc.blocks[h] = block
+		parent = block.Hash()
+	}
 	var logIndex uint
 	blockTxs := map[uint64][]*ethtypes.Transaction{100: {relay}, 101: {direct, router}, 102: {reverted}}
 	for _, height := range []uint64{100, 101, 102, 103} {

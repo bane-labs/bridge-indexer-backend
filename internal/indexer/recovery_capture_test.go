@@ -34,6 +34,16 @@ func TestCaptureRecoveryFixtures(t *testing.T) {
 			"ndmeme_27_n3_located": {Chain: chainN3, Start: 13051400, Target: 13051600, EventFilter: "live"},
 			// The same block, but in the fake plugin's replayed history.
 			"ndmeme_27_n3_replayed": {Chain: chainN3, Start: 13051516, Target: 13051516, EventFilter: "replayed"},
+			// Native bridge before and after each chain's 3.0.0 activation.
+			"neox_gas_pre_3_0":         {Chain: chainNeoX, Start: 5296, Target: 5511},
+			"neox_gas_claimable_958":   {Chain: chainNeoX, Start: 1270711, Target: 1270711},
+			"neox_native_post_3_0":     {Chain: chainNeoX, Start: 1779484, Target: 1779491},
+			"n3_gas_deposit_1":         {Chain: chainN3, Start: 5752006, Target: 5752006},
+			"n3_gas_withdrawal_1":      {Chain: chainN3, Start: 5752312, Target: 5752312},
+			"n3_native_deposit_1317":   {Chain: chainN3, Start: 6881592, Target: 6881592},
+			"n3_native_withdrawal_441": {Chain: chainN3, Start: 6881599, Target: 6881599},
+			// The only Neo X token claimable ever (nonce 108) and its silent claim.
+			"neox_token_claim_108": {Chain: chainNeoX, Start: 6748615, Target: 6757004, Reconcile: true},
 		},
 	}
 	seen := map[string]bool{}
@@ -49,8 +59,13 @@ func TestCaptureRecoveryFixtures(t *testing.T) {
 		if err := r.Begin(t.Context(), c.Start, c.Target, c.EventFilter != ""); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if err := r.Run(t.Context(), RecoveryRunOptions{Batch: 100}, nil); err != nil {
+		if err := r.Run(t.Context(), RecoveryRunOptions{Batch: 100000}, nil); err != nil {
 			t.Fatalf("%s: %v", name, err)
+		}
+		if c.Reconcile {
+			if _, err := r.ReconcileClaims(t.Context()); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
 		}
 		for _, e := range captured() {
 			if key := c.Chain + rpcKey(e.Method, e.Params); !seen[key] {
@@ -59,6 +74,15 @@ func TestCaptureRecoveryFixtures(t *testing.T) {
 			}
 		}
 	}
+	// Neo X testnet shares the native contract addresses but not mainnet's
+	// upgrade history: live indexing of a testnet block whose Native* event
+	// lies below mainnet's 3.0.0 height, and a refused recovery.
+	testnetRPC := envOr("CAPTURE_NEOX_TESTNET_RPC", "https://testnet.rpc.banelabs.org")
+	f.Endpoints[neoxTestnet] = testnetRPC
+	srv, captured := rpcServer(t, testnetRPC, nil)
+	captureNeoXTestnet(t, srv.URL)
+	f.Exchanges[neoxTestnet] = captured()
+
 	raw, err := json.MarshalIndent(f, "", " ")
 	if err != nil {
 		t.Fatal(err)

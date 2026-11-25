@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
@@ -105,7 +106,22 @@ type n3ExecutionGroup struct {
 
 // decodeN3LifecycleTransaction consumes all notifications from a HALT transaction.
 // A root is independent of the eventual outcome, including in batched relays.
+// n3NativeName maps the pre-3.0.0 Gas* native bridge events to their Native*
+// successors, which have the same fields.
+func n3NativeName(name string) string {
+	switch name {
+	case "GasWithdrawalRootUpdate", "GasWithdrawal", "GasClaimable", "GasClaim":
+		return "Native" + strings.TrimPrefix(name, "Gas")
+	}
+	return name
+}
+
 func decodeN3LifecycleTransaction(notifications []n3Notification, tokenBridge, messageBridge util.Uint160, height uint32, blockHash, txHash string, timestamp time.Time) ([]datastore.LifecycleObservation, error) {
+	for i := range notifications {
+		if notifications[i].event.ScriptHash.Equals(tokenBridge) {
+			notifications[i].event.Name = n3NativeName(notifications[i].event.Name)
+		}
+	}
 	var observations []datastore.LifecycleObservation
 	var roots []n3RootObservation
 	groups := make(map[uint64]*n3ExecutionGroup)

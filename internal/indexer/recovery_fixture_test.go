@@ -41,6 +41,7 @@ type recoveryCase struct {
 	Start       uint64 `json:"start"`
 	Target      uint64 `json:"target"`
 	EventFilter string `json:"event_filter,omitempty"` // fake plugin, see eventFilterFor
+	Reconcile   bool   `json:"reconcile,omitempty"`    // run Neo X claim reconciliation after the replay
 }
 
 type recoveryFixture struct {
@@ -190,8 +191,13 @@ func replayRecoveryCase(t *testing.T, f *recoveryFixture, name string, store *da
 	if err := r.Begin(ctx, c.Start, c.Target, c.EventFilter != ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(ctx, RecoveryRunOptions{Batch: 100}, nil); err != nil {
+	if err := r.Run(ctx, RecoveryRunOptions{Batch: 100000}, nil); err != nil {
 		t.Fatal(err)
+	}
+	if c.Reconcile {
+		if _, err := r.ReconcileClaims(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -291,4 +297,30 @@ func useFakeEventFilter(t *testing.T, r *Recoverer, f *fakeEventFilter) {
 		t.Fatal(err)
 	}
 	r.UseEventFilter(filter)
+}
+
+// neoxTestnet keys the recorded Neo X testnet exchanges.
+const neoxTestnet = "neo_x_testnet"
+
+// testnetNativeRootBlock holds NativeDepositRootUpdate nonce 938 on Neo X
+// testnet, below mainnet's 3.0.0 activation height.
+const testnetNativeRootBlock uint64 = 1_732_185
+
+// captureNeoXTestnet runs the live Neo X range decoder over the testnet
+// block and a recovery begin, against url. Shared by capture and replay.
+func captureNeoXTestnet(t *testing.T, url string) (*datastore.OperationStore, error) {
+	t.Helper()
+	store, opStore := openRecoveryStore(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	client, err := neox.NewClient(context.Background(), []string{url}, logger, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proc := NewNeoXEventProcessor(opStore, mainnetNeoXTokenBridge, mainnetNeoXMessageBridge, logger)
+	live := NewNeoXIndexer(client, store, opStore, nil, proc, []string{mainnetNeoXTokenBridge, mainnetNeoXMessageBridge}, 0, 1, logger, nil)
+	if err := live.processBlockRange(context.Background(), testnetNativeRootBlock, testnetNativeRootBlock); err != nil {
+		t.Fatalf("testnet live range: %v", err)
+	}
+	rec := NewNeoXRecoverer(client, store, opStore, mainnetNeoXTokenBridge, mainnetNeoXMessageBridge, 1, logger)
+	return opStore, rec.Begin(context.Background(), testnetNativeRootBlock, testnetNativeRootBlock, false)
 }

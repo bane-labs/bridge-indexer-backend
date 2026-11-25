@@ -23,7 +23,11 @@ func recoveryRange(chain string, from, to uint64) RecoveryRange {
 	if from > 0 {
 		parent = fmt.Sprintf("block-%d", from-1)
 	}
-	return RecoveryRange{Chain: chain, From: from, To: to, FromParentHash: parent, ToHash: fmt.Sprintf("block-%d", to), VerifiedPaths: BaseRecoveryPaths(chain)}
+	paths := BaseRecoveryPaths(chain)
+	if chain == "neo_x" {
+		paths = append(paths, "transactions", "claims") // scanned for silent claims
+	}
+	return RecoveryRange{Chain: chain, From: from, To: to, FromParentHash: parent, ToHash: fmt.Sprintf("block-%d", to), VerifiedPaths: paths}
 }
 
 func tokenID(dir types.Direction, nonce uint64, src, dst string) OperationIdentity {
@@ -624,5 +628,63 @@ func TestRecoveryLocatedRangesNeedATrustedIndex(t *testing.T) {
 	mustCommit(t, other, r, RecoveryBatch{})
 	if m, _ := other.GetRecoveryManifest("neo_n3"); m.LocatedBlocks != 100 || !m.Contiguous() {
 		t.Fatalf("located coverage: %+v", m)
+	}
+}
+
+func TestEventOnlyRangesAndClaimReconciliationGuards(t *testing.T) {
+	s := newTestStore(t)
+	os := NewOperationStore(s, nil)
+	if err := os.BeginRecovery(recoveryManifest("neo_x", 0, 199)); err != nil {
+		t.Fatal(err)
+	}
+	r := recoveryRange("neo_x", 0, 99)
+	r.VerifiedPaths = BaseRecoveryPaths("neo_x") // bridge logs only
+	if _, err := os.CommitRecoveryRange(r, RecoveryBatch{}); err == nil {
+		t.Fatal("event-only range committed without deferring claims")
+	}
+	if _, err := os.CommitRecoveryRange(r, RecoveryBatch{TraceGaps: []NeoXClaimTraceGap{{0, 50, GapClaimsDeferred}}}); err == nil {
+		t.Fatal("event-only range deferred only part of its claims")
+	}
+	a := tokenID(types.DirectionDeposit, 7, "aa", "bb")
+	b := tokenID(types.DirectionDeposit, 8, "aa", "bb")
+	claimable := func(id OperationIdentity, h uint64) LifecycleObservation {
+		return LifecycleObservation{id, FactClaimable, lifecycleEvidence("neo_x", fmt.Sprintf("relay-%d", id.Nonce), h), ""}
+	}
+	mustCommit(t, os, r, RecoveryBatch{Observations: []LifecycleObservation{claimable(a, 10), claimable(b, 20)},
+		TraceGaps: []NeoXClaimTraceGap{{0, 99, GapClaimsDeferred}}})
+	if _, err := os.ReconcileNeoXClaims(ClaimReconciliation{Through: 99, Outstanding: []OperationIdentity{a}}); err == nil {
+		t.Fatal("reconciliation that skipped a claimable accepted")
+	}
+	if _, err := os.ReconcileNeoXClaims(ClaimReconciliation{Through: 150, Outstanding: []OperationIdentity{a, b}}); err == nil {
+		t.Fatal("reconciliation beyond the committed height accepted")
+	}
+	claim := lifecycleEvidence("neo_x", "claim-tx", 60)
+	claim.Kind, claim.Position = "call", "top-level"
+	sum, err := os.ReconcileNeoXClaims(ClaimReconciliation{Through: 99, Claims: []LifecycleObservation{{a, FactClaim, claim, ""}},
+		Unresolved: []UnresolvedNeoXTokenClaim{{Identity: b, ConsumedAt: 70, Reason: "indirect_claim_trace_unsupported"}}})
+	if err != nil || sum.GapsCleared {
+		t.Fatalf("unresolved claim cleared gaps: %+v %v", sum, err)
+	}
+	if l, _ := os.GetLifecycle(b); l.Claim != nil {
+		t.Fatal("unresolved claim recorded as a claim")
+	}
+	if st, _ := os.RecoveryStatus("neo_x"); st.Complete || st.UnresolvedClaims != 1 || st.ClaimsDeferredBlocks != 100 {
+		t.Fatalf("status: %+v", st)
+	}
+	// Later evidence: b is outstanding after all (record held again is
+	// impossible on chain, but a corrected reconciliation replaces records).
+	sum, err = os.ReconcileNeoXClaims(ClaimReconciliation{Through: 99, Outstanding: []OperationIdentity{b}})
+	if err != nil || !sum.GapsCleared {
+		t.Fatalf("reconciliation: %+v %v", sum, err)
+	}
+	if u, _ := s.ListUnresolvedNeoXTokenClaims(); len(u) != 0 {
+		t.Fatalf("unresolved records not replaced: %+v", u)
+	}
+	if gaps, _ := s.NeoXClaimCoverageGaps(0, 99); len(gaps) != 0 {
+		t.Fatalf("gaps: %+v", gaps)
+	}
+	m, _ := os.GetRecoveryManifest("neo_x")
+	if m.Claims == nil || m.Claims.Through != 99 || m.NextHeight != 100 {
+		t.Fatalf("manifest: %+v", m)
 	}
 }
