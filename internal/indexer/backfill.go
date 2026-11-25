@@ -437,7 +437,7 @@ func (b *Backfiller) resolveWithdrawals(
 // extractNeoXCompletionMatch returns bridge type, nonce and destination token.
 func extractNeoXCompletionMatch(log ethtypes.Log) (types.BridgeType, uint64, string, bool) {
 	switch log.Topics[0] {
-	case sigNativeClaim, sigNativeClaimable, sigNativeDeposit:
+	case sigNativeClaim, sigNativeClaimable, sigNativeDeposit, sigGasClaim, sigGasClaimable, sigGasDeposit:
 		if len(log.Topics) < 2 {
 			return "", 0, "", false
 		}
@@ -492,7 +492,7 @@ func extractN3WithdrawalKey(event state.NotificationEvent) (withdrawalKey, bool)
 	}
 
 	switch event.Name {
-	case "NativeWithdrawal":
+	case "NativeWithdrawal", "GasWithdrawal":
 		if len(items) < 1 {
 			return withdrawalKey{}, false
 		}

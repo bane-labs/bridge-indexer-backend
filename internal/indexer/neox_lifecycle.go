@@ -24,9 +24,18 @@ var (
 	sigProxyUpgrade      = crypto.Keccak256Hash([]byte("Upgraded(address)"))
 	sigERC20Transfer     = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
 	claimTokenSelector   = crypto.Keccak256([]byte("claimToken(address,uint256)"))[:4]
-	// verifiedClaimImplementation is the only bridge implementation whose
-	// silent claimToken semantics are verified.
+	// verifiedClaimImplementation is the current (3.0.0) bridge implementation.
 	verifiedClaimImplementation = common.HexToAddress("0x671bcb1b24e75a37adb283ffa509620c02eb35c6")
+	// verifiedClaimImplementations are the mainnet Bridge implementations
+	// whose claimToken is the same silent call (delete the claimable record,
+	// then safeTransfer; no bridge event): 1.0.0 at genesis (byte-identical
+	// to its release artifact), 2.0.0 from 655,999 (executable code
+	// identical) and 3.0.0 from 1,772,382 (identical).
+	verifiedClaimImplementations = map[common.Address]string{
+		common.HexToAddress("0x1212100000000000000000000000000000000004"): "1.0.0",
+		common.HexToAddress("0xb72c01360c20e03e315dccca46804735ab99d3d4"): "2.0.0",
+		verifiedClaimImplementation:                                       "3.0.0",
+	}
 )
 
 func wordNonce(w common.Hash) (uint64, error) {
@@ -66,7 +75,7 @@ func decodeNeoXLifecycleTransaction(logs []ethtypes.Log, tokenBridge, messageBri
 			continue
 		}
 		sig := l.Topics[0]
-		if l.Address == tokenBridge && (sig == sigNativeDepositRoot || sig == sigTokenDepositRoot) || l.Address == messageBridge && sig == sigNeoToEvmRootUpdate {
+		if l.Address == tokenBridge && (sig == sigNativeDepositRoot || sig == sigGasDepositRoot || sig == sigTokenDepositRoot) || l.Address == messageBridge && sig == sigNeoToEvmRootUpdate {
 			expected := 2
 			if sig == sigTokenDepositRoot {
 				expected = 4
@@ -137,6 +146,15 @@ func decodeNeoXLifecycleTransaction(logs []ethtypes.Log, tokenBridge, messageBri
 			}
 			kind := []string{"execute", "store", "return"}[mt]
 			out = append(out, lifecycleObs(datastore.OperationIdentity{BridgeType: types.BridgeTypeMessage, Direction: types.DirectionWithdrawal, Nonce: n}, datastore.FactMessageType, eventEvidence(l, blockTime, map[string]string{"metadata": fmt.Sprintf("0x%x", metadata)}), kind))
+		}
+		// Gas* (before 3.0.0) and Native* carry the same fields for the native bridge.
+		switch sig {
+		case sigGasDeposit:
+			sig = sigNativeDeposit
+		case sigGasClaimable:
+			sig = sigNativeClaimable
+		case sigGasClaim:
+			sig = sigNativeClaim
 		}
 		if l.Address == tokenBridge && (sig == sigNativeDeposit || sig == sigNativeClaimable || sig == sigNativeClaim || sig == sigTokenDeposit || sig == sigTokenClaimable) || l.Address == messageBridge && (sig == sigMessageStore || sig == sigExecutionResult) {
 			bt := types.BridgeTypeNative
@@ -326,7 +344,7 @@ func decodeTokenClaimCall(tx *ethtypes.Transaction, receipt *ethtypes.Receipt, b
 	if receipt == nil || receipt.Status != ethtypes.ReceiptStatusSuccessful || receipt.TxHash != tx.Hash() {
 		return nil, nil
 	}
-	if implementation != verifiedClaimImplementation {
+	if _, ok := verifiedClaimImplementations[implementation]; !ok {
 		return nil, fmt.Errorf("unverified claimToken implementation %s", implementation.Hex())
 	}
 	if new(big.Int).SetBytes(input[4:16]).Sign() != 0 {

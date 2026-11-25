@@ -201,12 +201,12 @@ func TestN3IndirectNotificationAndFaultIgnored(t *testing.T) {
 	// The caller's transaction script does not need to mention either bridge.
 	// Only notifications emitted by the watched contract count.
 	fault := state.Execution{VMState: vmstate.Fault, Events: []state.NotificationEvent{root, distributed}}
-	ops, obs, err := idx.decodeN3Executions([]state.Execution{fault}, 10, "block", "tx", time.Unix(100, 0))
+	ops, obs, err := idx.decodeN3Executions([]state.Execution{fault}, 7_000_000, "block", "tx", time.Unix(100, 0))
 	if err != nil || len(ops) != 0 || len(obs) != 0 {
 		t.Fatalf("FAULT established evidence: %v %+v", err, obs)
 	}
 	halt := state.Execution{VMState: vmstate.Halt, Events: []state.NotificationEvent{root, distributed}}
-	ops, obs, err = idx.decodeN3Executions([]state.Execution{halt}, 10, "block", "tx", time.Unix(100, 0))
+	ops, obs, err = idx.decodeN3Executions([]state.Execution{halt}, 7_000_000, "block", "tx", time.Unix(100, 0))
 	if err != nil || len(ops) != 0 || len(obs) != 2 || obs[1].Fact != datastore.FactDistribution || obs[0].Evidence.Position != "0:0" {
 		t.Fatalf("indirect receipt missed: %v %+v", err, obs)
 	}

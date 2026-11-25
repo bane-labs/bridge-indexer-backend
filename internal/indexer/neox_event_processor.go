@@ -103,10 +103,10 @@ func (p *NeoXEventProcessorImpl) processTokenBridgeLog(
 	blockTime time.Time,
 ) (*types.BridgeOperation, *PauseState, error) {
 	switch topic0 {
-	case sigNativeWithdrawal:
+	case sigNativeWithdrawal, sigGasWithdrawal: // Gas*: native bridge before 3.0.0
 		op, err := p.handleNativeWithdrawal(log, blockTime)
 		return op, nil, err
-	case sigNativeDeposit, sigNativeClaimable, sigNativeClaim:
+	case sigNativeDeposit, sigNativeClaimable, sigNativeClaim, sigGasDeposit, sigGasClaimable, sigGasClaim:
 		op, err := p.handleNativeDepositComplete(log, blockTime)
 		return op, nil, err
 	case sigTokenWithdrawal:
@@ -123,9 +123,9 @@ func (p *NeoXEventProcessorImpl) processTokenBridgeLog(
 		return nil, &PauseState{Paused: true, Scope: "withdrawals"}, nil
 	case sigWithdrawalUnpause:
 		return nil, &PauseState{Paused: false, Scope: "withdrawals"}, nil
-	case sigNativeBridgePause:
+	case sigNativeBridgePause, sigGasBridgePause:
 		return nil, &PauseState{BridgeType: types.BridgeTypeNative, Paused: true, Scope: "all"}, nil
-	case sigNativeBridgeUnpause:
+	case sigNativeBridgeUnpause, sigGasBridgeUnpause:
 		return nil, &PauseState{BridgeType: types.BridgeTypeNative, Paused: false, Scope: "all"}, nil
 	}
 	return nil, nil, nil

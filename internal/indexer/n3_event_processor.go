@@ -64,11 +64,11 @@ func (p *N3EventProcessorImpl) processNeoXBridgeEvent(
 	blockTime time.Time,
 ) (*types.BridgeOperation, error) {
 	switch event.Name {
-	case "NativeDeposit":
+	case "NativeDeposit", "GasDeposit": // GasDeposit: native bridge before 3.0.0
 		return p.handleNativeDeposit(event, blockHeight, txHash, blockTime)
 	case "TokenDeposit":
 		return p.handleTokenDeposit(event, blockHeight, txHash, blockTime)
-	case "NativeWithdrawal":
+	case "NativeWithdrawal", "GasWithdrawal":
 		return p.handleNativeWithdrawalComplete(event, blockHeight, txHash, blockTime)
 	case "TokenWithdrawal":
 		return p.handleTokenWithdrawalComplete(event, blockHeight, txHash, blockTime)

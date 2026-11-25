@@ -45,7 +45,20 @@ type NeoXIndexer struct {
 	// indexing keeps 1 (serial) so a shared, rate-limited endpoint is not
 	// overloaded; recovery may raise it for a dedicated node.
 	blockFetchConcurrency int
+	// deferClaims skips the per-block silent-claim scan: only bridge logs
+	// and their receipts are fetched, and the whole range is returned as a
+	// claims_deferred gap for later claim reconciliation (recovery only).
+	deferClaims bool
+	// headerFetchConcurrency bounds parallel header fetches (0: 10).
+	headerFetchConcurrency int
 }
+
+// filterLogsError marks an eth_getLogs failure, which a caller may retry
+// with a smaller range.
+type filterLogsError struct{ err error }
+
+func (e filterLogsError) Error() string { return e.err.Error() }
+func (e filterLogsError) Unwrap() error { return e.err }
 
 func NewNeoXIndexer(
 	client *neox.Client,
@@ -197,7 +210,7 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 
 	logs, err := idx.client.FilterLogs(ctx, query)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("filter logs %d-%d: %w", from, to, err)
+		return nil, nil, nil, nil, filterLogsError{fmt.Errorf("filter logs %d-%d: %w", from, to, err)}
 	}
 
 	// Collect unique block numbers that need headers (log blocks + to-block).
@@ -222,6 +235,11 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 	for _, l := range logs {
 		if l.Removed {
 			return nil, nil, nil, nil, fmt.Errorf("removed Neo X log at %d", l.BlockNumber)
+		}
+		if len(l.Topics) > 0 {
+			if err := checkNeoXLogVersion(l.Address, l.Topics[0], l.BlockNumber); err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("log %s/%d: %w", l.TxHash, l.Index, err)
+			}
 		}
 		if l.BlockHash != headerCache[l.BlockNumber].Hash() {
 			return nil, nil, nil, nil, fmt.Errorf("log/header hash mismatch at %d", l.BlockNumber)
@@ -263,7 +281,11 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 	// without traces still yields verified direct claims and is recorded as a
 	// claim coverage gap, never as evidence that no indirect claim happened.
 	var gaps []datastore.NeoXClaimTraceGap
-	if idx.processor != nil && idx.opStore != nil {
+	if idx.processor != nil && idx.opStore != nil && idx.deferClaims {
+		// Silent claimToken calls emit no bridge log, so an event-only range
+		// says nothing about claims: it stays explicitly unresolved.
+		gaps = []datastore.NeoXClaimTraceGap{{FromHeight: from, ToHeight: to, Reason: datastore.GapClaimsDeferred}}
+	} else if idx.processor != nil && idx.opStore != nil {
 		blocks, err := idx.prefetchBlocks(ctx, from, to)
 		if err != nil {
 			return nil, nil, nil, nil, err
@@ -387,7 +409,10 @@ func (idx *NeoXIndexer) prefetchBlocks(ctx context.Context, from, to uint64) ([]
 
 // prefetchHeaders fetches all required block headers concurrently.
 func (idx *NeoXIndexer) prefetchHeaders(ctx context.Context, blocks map[uint64]struct{}) map[uint64]*ethtypes.Header {
-	const maxConcurrent = 10
+	maxConcurrent := idx.headerFetchConcurrency
+	if maxConcurrent <= 0 {
+		maxConcurrent = 10
+	}
 	sem := make(chan struct{}, maxConcurrent)
 
 	type result struct {
@@ -574,11 +599,20 @@ func (idx *NeoXIndexer) enrichClaimTraceGap(ctx context.Context) {
 	if idx.processor == nil || idx.opStore == nil || time.Now().Before(idx.nextEnrich) {
 		return
 	}
-	gaps, err := idx.store.ListNeoXClaimTraceGaps()
-	if err != nil || len(gaps) == 0 {
-		if err != nil {
-			idx.logger.Warn("List Neo X claim trace gaps", "error", err)
+	all, err := idx.store.ListNeoXClaimTraceGaps()
+	if err != nil {
+		idx.logger.Warn("List Neo X claim trace gaps", "error", err)
+		return
+	}
+	// Gaps of event-only recovery are reconciled from contract state, not
+	// by tracing millions of blocks one at a time.
+	var gaps []datastore.NeoXClaimTraceGap
+	for _, g := range all {
+		if g.Reason != datastore.GapClaimsDeferred {
+			gaps = append(gaps, g)
 		}
+	}
+	if len(gaps) == 0 {
 		return
 	}
 	if err := idx.enrichClaimTraceBlock(ctx, gaps[0].FromHeight); err != nil {
