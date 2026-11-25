@@ -41,6 +41,10 @@ type NeoXIndexer struct {
 	logger           *slog.Logger
 	pauseDetector    *monitor.PauseDetector
 	nextEnrich       time.Time
+	// blockFetchConcurrency bounds parallel block fetches in a range. Live
+	// indexing keeps 1 (serial) so a shared, rate-limited endpoint is not
+	// overloaded; recovery may raise it for a dedicated node.
+	blockFetchConcurrency int
 }
 
 func NewNeoXIndexer(
@@ -260,12 +264,13 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 	// claim coverage gap, never as evidence that no indirect claim happened.
 	var gaps []datastore.NeoXClaimTraceGap
 	if idx.processor != nil && idx.opStore != nil {
+		blocks, err := idx.prefetchBlocks(ctx, from, to)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
 		tracing, reason := true, ""
 		for height := from; height <= to; height++ {
-			block, err := idx.client.BlockByNumber(ctx, new(big.Int).SetUint64(height))
-			if err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("fetch claim block %d: %w", height, err)
-			}
+			block := blocks[height-from]
 			if h := headerCache[height]; h != nil && h.Hash() != block.Hash() {
 				return nil, nil, nil, nil, fmt.Errorf("claim block hash mismatch %d", height)
 			}
@@ -352,6 +357,32 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 	}
 
 	return newState, allOps, observations, gaps, nil
+}
+
+// prefetchBlocks fetches every block of the range with bounded concurrency.
+// All blocks are required: any failure fails the range.
+func (idx *NeoXIndexer) prefetchBlocks(ctx context.Context, from, to uint64) ([]*ethtypes.Block, error) {
+	maxConcurrent := max(idx.blockFetchConcurrency, 1)
+	blocks := make([]*ethtypes.Block, to-from+1)
+	errs := make([]error, len(blocks))
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	for i := range blocks {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			blocks[i], errs[i] = idx.client.BlockByNumber(ctx, new(big.Int).SetUint64(from+uint64(i)))
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			return nil, fmt.Errorf("fetch claim block %d: %w", from+uint64(i), err)
+		}
+	}
+	return blocks, nil
 }
 
 // prefetchHeaders fetches all required block headers concurrently.

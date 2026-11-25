@@ -42,6 +42,7 @@ func main() {
 	statusCmd := newStatusCommand()
 	cacheValidateCmd := newCacheValidateCommand()
 	cacheFillN3Cmd := newCacheFillN3Command()
+	rootCmd.AddCommand(newRecoverCommand())
 	rootCmd.AddCommand(backfillCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(cacheValidateCmd)

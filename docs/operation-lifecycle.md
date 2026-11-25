@@ -12,17 +12,15 @@ can arrive before the source operation. No legacy `op:*`, status index,
 completion timestamp, or destination transaction is migrated or rewritten.
 Missing sidecars and absent individual facts mean **unknown**.
 
-Separate `lifecycle_recovery:v1:*` manifests store each destination chain's
-watched contracts, implementation ranges, evidence paths, inclusive replay
-bounds, target hash, and contiguous watermark/hash. A block's observations and
-watermark can be committed together only in height and parent-hash order after
-the caller has verified all required evidence paths. This is a storage
-interface. The manifest retains a digest of the last committed block and its
-observations so an exact retry succeeds without advancing the watermark;
-changed evidence is rejected. The caller must actually verify block identity,
-receipt success, call traces, supported implementations, and decoded provenance.
-A target-complete manifest alone does not certify live coverage after cutover or
-enable any negative conclusion.
+Separate `lifecycle_recovery:v1:*` manifests store each chain's watched
+contracts, implementation ranges, evidence paths, inclusive replay bounds in
+that chain's own heights, every target and its hash, and the contiguous
+watermark/hash. The `recover` command replays ranges through the live decoders
+and commits each range with its watermark in one transaction; see
+[Recovery command and runbook](#recovery-command-and-runbook). A contiguous
+manifest alone does not certify claim coverage or enable any negative
+conclusion: unresolved claim records and Neo X claim trace gaps inside the
+bounds keep it incomplete.
 
 The Neo X live indexer writes decoded destination events, Neo X message
 source types and verified direct and indirect silent token claims with its
@@ -48,10 +46,9 @@ and malformed watched notifications stop the checkpoint. A committed token claim
 without a verified claimable pair is retained as an unresolved notification
 alongside the checkpoint; its lifecycle claim stays unknown until recovery.
 A received root replaces same-nonce synthetic
-destination state. The NEO withdrawal nonce 11 receipt remains unverified and
-is not included as a fixture. No public API fields or alert and webhook rules
-change. Bounded historical recovery and verified
-cutover remain prerequisites to the public projection and relay-stuck precedence.
+destination state. No public API fields or alert and webhook rules change.
+Historical recovery tooling exists; a verified production recovery and cutover
+remain prerequisites to the public projection and relay-stuck precedence.
 
 This document records the lifecycle contract adopted for backend issues [#28](https://github.com/bane-labs/bridge-indexer-backend/issues/28) and [#29](https://github.com/bane-labs/bridge-indexer-backend/issues/29), and frontend issues [#9](https://github.com/bane-labs/bridge-indexer-frontend/issues/9) and [#17](https://github.com/bane-labs/bridge-indexer-frontend/issues/17). It specifies the implementation to follow. The current operation API still exposes the legacy completion model.
 
@@ -231,11 +228,44 @@ The known incident checks from the November 20, 2026 investigation are acceptanc
 
 - Message Neo X to N3 had source nonce 15 and indexed destination nonce 13. N3 `evmToNeoNonce` returned 15 and `evmToNeoRoot` matched the source root `bd8a3be21d32d769c8f80e7f803166aa7c29bdfb72a315aabb3678869eb324f6`. Recover the covering receipt and per-message storage independently of execution.
 - NDMEME deposit nonce 27 had N3 source height `13051516` and a Neo X `TokenDeposit` observation in transaction `0xc34ba5e2efcc32a5c6b317c87e8ad7b4e5e2113e9a0eb333e6f79cc8a4f6cdb2`, log index 2, block `0x74acee`. Topic zero was `0xda5273705dbef4bf1b902a131c2eac086b7e1476a8ab0cb4da08af1fe1bd8e3b`, token `0xe816dee05cf6d0f2a57eb4c489241d8326b5d106`, nonce 27. The recovery regression must find this lower-numbered destination block using Neo X bounds. Starting a Neo X scan at N3 height `13051516` must fail the test. Recover arrival and distribution and verify the history and direction. [Frontend #22](https://github.com/bane-labs/bridge-indexer-frontend/issues/22)
-- NEO withdrawal nonce 11 was reported distributed in N3 transaction `0x1c4c374824b8059230e3bd1dc8c780294531bed4c591de72032119372a79c1f8`. Retrieve and validate the actual notification set before using it as a regression fixture or closing the issue. [Frontend #16](https://github.com/bane-labs/bridge-indexer-frontend/issues/16)
+- NEO withdrawal nonce 11 was reported distributed in N3 transaction `0x1c4c374824b8059230e3bd1dc8c780294531bed4c591de72032119372a79c1f8`. Its actual application log (N3 block `6818342`, HALT) holds `TokenWithdrawalRootUpdate` (nonce 11, Neo X token `c28736dc83f4fd43d6fb832fd93c3ee7bb26828f`, NEO `ef4073a0f2b305a38ec4050e4d3d28bc40ea63f5`) at `0:0` and `TokenWithdrawal` (amount 1) at `0:4`. [Frontend #16](https://github.com/bane-labs/bridge-indexer-frontend/issues/16)
+
+These are captured from mainnet in [recovery-incidents.json](fixtures/recovery-incidents.json) by `go test -tags capture -run TestCaptureRecoveryFixtures ./internal/indexer`, which runs the recovery code against public nodes through a recording proxy; the tests replay the recorded responses through the same code. The message relays are N3 blocks `14720004` (`EvmToNeoRootUpdate` 14 and `Store` 14) and `14720342` (`EvmToNeoRootUpdate` 15 with root `bd8a3be2…24f6`, and `Store` 15), with no `Execution` in either transaction. The NDMEME source is N3 block `13051516`, transaction `0x7f3a35997b347304c5f3de909e20c4c8ddc4fb17b488646ab36dbf820f2cc4a0`, whose deposit root equals the Neo X received root `5c744169…d6bc83`. These fixtures verify the recovery code against real evidence. They do not show that the production database has been recovered.
 
 The persistence and decoder PRs must cover immediate distribution, claimable then claimed, stored and executable messages, committed execution results, reverted attempts, chunked events, multiple token pairs at equal nonces, retries, and out-of-order processing. Preserve the legacy response and test the new frontend through its API request path with reusable fixtures, MSW, and providers.
 
-Before production, back up the database and rehearse migration and rollback on a copy. Recover and verify the backend first, verify both API projections, then deploy the frontend. Retain the original database until verification completes. Production deployment requires separate authorization. Recovering missing source history is covered separately by frontend #19.
+Before production, back up the database and rehearse migration and rollback on a copy. Recover and verify the backend first, verify both API projections, then deploy the frontend. Retain the original database until verification completes. Production deployment requires separate authorization. Replaying a source chain from its bridge deployment also inserts source operations missing from the database (frontend #19).
+
+### Recovery command and runbook
+
+`bridge-indexer recover` uses the server's configuration (`DB_PATH`, `NEO_N3_RPC_ENDPOINTS`, `NEOX_RPC_ENDPOINTS`, `N3_NEOX_BRIDGE`, `N3_MESSAGE_BRIDGE`, `NEOX_TOKEN_BRIDGE`, `NEOX_MESSAGE_BRIDGE`, `N3_SYNC_CONCURRENCY`, the RPC call intervals). Each chain has its own manifest and is replayed separately; one replay covers both roles of that chain, so the N3 replay recovers N3 source deposits and N3 destination evidence for withdrawals, and the Neo X replay the reverse.
+
+| Command | Effect |
+| --- | --- |
+| `recover begin --chain C --start S --target T` | Creates the manifest for `[S, T]` in chain C's heights. `T` is a height, `head` or `checkpoint` (the live checkpoint). The target must exist on C now and its hash is captured from C. Rerunning with the same bounds resumes; different bounds are refused. |
+| `recover run --chain C [--batch N] [--max-blocks M] [--concurrency K]` | Replays from the watermark. Each range of at most N blocks (250 on Neo X, 100 on N3) is committed atomically; `--max-blocks` bounds one invocation. On Neo X, K parallel block fetches (default 1); the public endpoint answers HTTP 429 even at 3, so raise K only on a dedicated node. Ctrl-C or an error keeps the last committed range. Rerun to resume. Before starting it re-checks the target hash against C and the configured contracts against the manifest. |
+| `recover extend --chain C --target T` | Raises the target, keeping progress. A target can never be lowered or re-hashed. |
+| `recover status [--chain C] [--json]` | Opens the database read-only (only while neither the server nor `recover run` has it open) and prints start, target, committed height, live checkpoint, counts, gap blocks, unresolved claims, `contiguous`, `complete`, `handoff ready`, and the blocking reasons. |
+
+Each committed range writes, in one transaction: lifecycle observations (a conflict with stored evidence aborts the range); source operations whose record is absent (an existing record is never replaced); the legacy projection, which only moves a pending or stuck operation to completed using the same completing events as live indexing (Neo X deposit, claimable and claim events, and a message root update for its own nonce; N3 distribution, claim and execution), and lets a recovered operation take up a legacy deferred completion as live reconciliation does. A recovered operation with no destination evidence yet that is older than the configured stuck threshold (`STUCK_THRESHOLD_*`) is stored as legacy `stuck`: the stuck detector would otherwise move it there on its next pass and send one stale alert per historical operation. Younger ones stay `pending`. Neo X to N3 messages stay `pending`, as live. Its lifecycle stays unknown, and destination evidence found later completes it; directional states, which only rise, with a verified received root replacing same-nonce synthetic bookkeeping; the range's Neo X claim trace gaps (a traced block also resolves an earlier live gap for it) and the N3 claims still lacking a verified pair, which replace earlier unresolved records inside the range; and the watermark. Settlement is never written as execution, distribution or claim. The live checkpoint is never written. Every fact in a range must be on the replayed chain and inside the range.
+
+**Completion.** `complete` requires the manifest to be contiguous from start through the current target with the target hash matched, no Neo X claim trace gap and no unresolved N3 claim inside the bounds. `handoff ready` additionally requires the live checkpoint to equal the target, so the live indexer resumes at the first block after the verified interval: no block is uncovered and none is processed twice. Recovery never moves the checkpoint; instead the target is extended to it (`extend --target checkpoint`). A target beyond the checkpoint (for example `head` in a rehearsal) is not ready until live indexing has passed it and the target is extended again. A public Neo X endpoint without `debug_traceBlockByNumber` can recover every event, but leaves a gap for each block with transactions; completion then needs a tracing endpoint for those blocks (`recover` with a tracing endpoint over the same interval, or the live enrichment).
+
+**Live interaction.** The server and `recover` both open the database read-write, so Badger's directory lock lets only one run at a time. They can alternate: stop the server, run a bounded `recover run`, restart the server. Because every recovery write is insert-only or monotonic and conflicts abort, alternating never regresses live state, and live indexing after recovery accepts the same facts again.
+
+**N3 event filter plugin.** `recover begin --chain neo_n3 --event-filter` records the [AxLabs neo-event-filter-plugin](https://github.com/AxLabs/neo-event-filter-plugin) (reviewed at `651904a`) as the manifest's trusted index. `recover run` then probes `NEO_N3_RPC_ENDPOINTS` with `geteventfilterstatus` and sends plugin queries only to the first endpoint that answers. Backups without the plugin keep serving every standard call. Inside the plugin's live-indexed window, `[liveIndexedFrom, lastIndexedBlock]`, a range of up to `--located-batch` blocks (default 10000) is located with `geteventfilterlogs` for the two bridge contracts. Only the listed blocks and the range boundaries are fetched, and they are decoded from `getblock` and `getapplicationlog` exactly as in a full scan. The plugin is never used as evidence: it does not record VM state, its notification index is per block rather than per transaction position, and its payload encoding differs. Ranges below `liveIndexedFrom` are always scanned fully, because the plugin builds that part of its index by re-executing old transactions against the current state ("best-effort reconstruction"), which can produce different bridge nonces and roots or drop blocks whose re-execution fails. Before using it, each run applies a positive control: the plugin must list a bridge event in its live window, and that transaction's real application log and height on the same node must contain a HALT notification from the bridge. This rejects a plugin that answers every query with an empty page, for example one with a non-positive result cap. Each located range also requires the plugin node's `getblockhash` at the range end to equal the hash recovery verified, so the index belongs to the chain being recovered. An unavailable plugin, a failed control or query, a hash mismatch, or a window that changes during a query falls back to a full scan; it never blocks recovery. Trust assumption: located blocks (`located_blocks` in `status`) are covered on the plugin's word, and `status` then reports `complete (index-trusted)`. Its metadata cannot show a gap in live indexing (for example while the plugin was disabled, or a block whose indexing failed and was only logged), so a missed bridge notification there would go unnoticed. Use it only on a node that has run the plugin continuously since `liveIndexedFrom`, and keep the manifest's trusted index in mind before treating absence as `not_executed`. The live N3 indexer does not use the plugin.
+
+**Throughput.** Measured against public nodes on November 25, 2026: Neo X about 8 blocks/s serially (every block is fetched for silent claims), about 60 blocks/s at concurrency 10 until the node rate-limited; N3 about 21 blocks/s with `N3_SYNC_CONCURRENCY=8`. A full Neo X history (about 8.4 million blocks) therefore needs about 12 days serially on the public endpoint; plan maintenance windows or a dedicated node.
+
+**Source history (frontend #19).** Neo X's first `NativeDepositRootUpdate` is nonce 1317 at block 1,779,484. N3 native deposits with lower nonces, if the configured N3 bridge emitted them, therefore have no destination event on this Neo X chain (not yet verified on N3). Replaying N3 from the bridge deployment would insert them as legacy `stuck` with unknown lifecycle; it cannot recover their destination outcome. Decide before production whether that history should be shown.
+
+**Runbook.**
+
+1. Rehearse on a copy: copy the stopped database, then on the copy run `begin` for each chain with `--start` at that chain's bridge deployment height and `--target head`, `run` to completion, and `status`. Record durations, gap blocks and unresolved claims. Check the incident examples below in the copy's API. Discard the copy; its progress does not carry over.
+2. Production, possibly in several maintenance windows: stop the server, back up the database, `begin` with the same start heights and `--target checkpoint`, then `run --max-blocks N` sized to the window, and restart the server. Repeat `run` in later windows; the manifest persists.
+3. Cutover: stop the server, back up, `extend --target checkpoint` on each chain (the live indexer advanced meanwhile), `run` to the target, then `status`. Restart only when each chain is `handoff ready`, or, for Neo X without a tracing endpoint, when the only blocking reason is claim trace gaps and that limitation is accepted. In that case Neo X claim outcomes stay unknown, not `not_executed`.
+4. Rollback: stop the server and restore the backup. Recovery writes are additive and keyed, so a partial recovery can also be resumed instead.
+
 
 ## Contract evidence
 
