@@ -93,6 +93,8 @@ type LifecycleObservation struct {
 	MessageType string // only for FactMessageType
 }
 
+var ErrAmbiguousClaimPair = errors.New("ambiguous token pair for claim")
+
 // JSON persistence does not retain a time.Time's Location pointer. Compare
 // instants so a replay of the same chain observation remains idempotent.
 func sameEvidence(a, b *LifecycleEvidence) bool {
@@ -231,7 +233,7 @@ func (os *OperationStore) FindClaimableTokenPairForDirection(direction types.Dir
 			return nil
 		}
 		if found != nil {
-			return errors.New("ambiguous token pair for claim")
+			return ErrAmbiguousClaimPair
 		}
 		found = &OperationIdentity{BridgeType: types.BridgeTypeToken, Direction: direction,
 			Nonce: nonce, SourceToken: parts[0], DestinationToken: parts[1]}

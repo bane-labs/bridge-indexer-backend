@@ -86,3 +86,40 @@ func TestN3SourceReconcilesDeferredCompletionAtomically(t *testing.T) {
 		t.Fatalf("deferred completion lost: %+v %v", op, err)
 	}
 }
+
+func TestN3UnresolvedClaimAtomicRetryAndConflict(t *testing.T) {
+	s := newTestStore(t)
+	state := &types.IndexerState{Chain: "neo_n3", LastBlockHeight: 9, LastBlockHash: "block9"}
+	evidence := lifecycleEvidence("neo_n3", "claim-transaction", 9)
+	evidence.Kind = "notification"
+	claim := UnresolvedN3TokenClaim{Nonce: 11, DestinationToken: "0xabc", Evidence: evidence, Reason: "missing_claimable_pair"}
+	if err := s.SaveN3LifecycleCheckpoint(state, nil, nil, nil, claim); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveN3LifecycleCheckpoint(state, nil, nil, nil, claim); err != nil {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+	recorded, err := s.ListUnresolvedN3TokenClaims()
+	if err != nil || len(recorded) != 1 || recorded[0].Nonce != 11 {
+		t.Fatalf("missing recovery candidate: %+v %v", recorded, err)
+	}
+	next := &types.IndexerState{Chain: "neo_n3", LastBlockHeight: 10, LastBlockHash: "block10"}
+	conflict := claim
+	conflict.Nonce = 12
+	if err := s.SaveN3LifecycleCheckpoint(next, nil, nil, nil, conflict); err == nil {
+		t.Fatal("conflicting event identity accepted")
+	}
+	checkpoint, err := s.GetIndexerState("neo_n3")
+	if err != nil || checkpoint.LastBlockHeight != 9 {
+		t.Fatalf("failed write advanced checkpoint: %+v %v", checkpoint, err)
+	}
+	malformed := claim
+	malformed.Evidence.BlockHash = ""
+	if err := s.SaveN3LifecycleCheckpoint(next, nil, nil, nil, malformed); err == nil {
+		t.Fatal("malformed evidence advanced checkpoint")
+	}
+	checkpoint, _ = s.GetIndexerState("neo_n3")
+	if checkpoint.LastBlockHeight != 9 {
+		t.Fatalf("malformed write advanced checkpoint: %+v", checkpoint)
+	}
+}

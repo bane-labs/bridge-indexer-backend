@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -197,40 +198,65 @@ func (idx *N3Indexer) applyProcessedBlock(state *types.IndexerState, ops []*type
 }
 
 func (idx *N3Indexer) applyProcessedBlockWithLifecycle(state *types.IndexerState, ops []*types.BridgeOperation, observations []datastore.LifecycleObservation) error {
+	resolved := make([]datastore.LifecycleObservation, 0, len(observations))
+	var unresolved []datastore.UnresolvedN3TokenClaim
 	for i := range observations {
 		o := &observations[i]
-		if o.Fact != datastore.FactClaim || o.Identity.BridgeType != types.BridgeTypeToken || o.Identity.SourceToken != "" {
+		if o.Fact != datastore.FactClaim || o.Identity.BridgeType != types.BridgeTypeToken {
+			resolved = append(resolved, *o)
 			continue
 		}
 		var pair *datastore.OperationIdentity
+		ambiguous := false
 		for j := range observations {
 			candidate := &observations[j]
 			if candidate.Fact == datastore.FactClaimable && candidate.Identity.BridgeType == types.BridgeTypeToken && candidate.Identity.Nonce == o.Identity.Nonce && candidate.Identity.DestinationToken == o.Identity.DestinationToken {
 				if pair != nil {
-					return fmt.Errorf("ambiguous token claim nonce %d", o.Identity.Nonce)
+					ambiguous = true
+					break
 				}
 				copy := candidate.Identity
 				pair = &copy
 			}
 		}
-		if pair == nil {
-			var err error
-			pair, err = idx.opStore.FindClaimableTokenPairForDirection(types.DirectionWithdrawal, o.Identity.Nonce, o.Identity.DestinationToken)
+		if !ambiguous {
+			stored, err := idx.opStore.FindClaimableTokenPairForDirection(types.DirectionWithdrawal, o.Identity.Nonce, o.Identity.DestinationToken)
 			if err != nil {
-				return err
+				if !errors.Is(err, datastore.ErrAmbiguousClaimPair) {
+					return err
+				}
+				ambiguous = true
+			} else if pair != nil && stored != nil && *pair != *stored {
+				ambiguous = true
+			} else if pair == nil {
+				pair = stored
 			}
 		}
-		if pair == nil {
-			return fmt.Errorf("token claim nonce %d has no verified claimable pair; historical recovery required", o.Identity.Nonce)
+		if pair != nil && o.Identity.SourceToken != "" && o.Identity.SourceToken != pair.SourceToken {
+			ambiguous = true
+		}
+		if pair == nil || ambiguous {
+			reason := "missing_claimable_pair"
+			if ambiguous {
+				reason = "ambiguous_claimable_pair"
+			}
+			unresolved = append(unresolved, datastore.UnresolvedN3TokenClaim{Nonce: o.Identity.Nonce, DestinationToken: o.Identity.DestinationToken, Evidence: o.Evidence, Reason: reason})
+			continue
 		}
 		o.Identity = *pair
+		resolved = append(resolved, *o)
 	}
 	extra, err := idx.buildBridgeStateWriteOps(ops)
 	if err != nil {
 		return err
 	}
-	if err := idx.store.SaveN3LifecycleCheckpoint(state, ops, extra, observations); err != nil {
+	if err := idx.store.SaveN3LifecycleCheckpoint(state, ops, extra, resolved, unresolved...); err != nil {
 		return fmt.Errorf("save N3 lifecycle checkpoint: %w", err)
+	}
+	for _, claim := range unresolved {
+		if idx.logger != nil {
+			idx.logger.Warn("N3 token claim awaits historical pair recovery", "nonce", claim.Nonce, "destination_token", claim.DestinationToken, "tx", claim.Evidence.TxHash, "reason", claim.Reason)
+		}
 	}
 	return nil
 }

@@ -11,7 +11,7 @@ import (
 
 // SaveN3LifecycleCheckpoint commits source operations, destination receipts,
 // legacy completion, directional state and the contiguous checkpoint together.
-func (s *Store) SaveN3LifecycleCheckpoint(state *types.IndexerState, ops []*types.BridgeOperation, extra []WriteOp, observations []LifecycleObservation) error {
+func (s *Store) SaveN3LifecycleCheckpoint(state *types.IndexerState, ops []*types.BridgeOperation, extra []WriteOp, observations []LifecycleObservation, unresolved ...UnresolvedN3TokenClaim) error {
 	if state.Chain != "neo_n3" {
 		return fmt.Errorf("unexpected checkpoint chain %q", state.Chain)
 	}
@@ -26,6 +26,9 @@ func (s *Store) SaveN3LifecycleCheckpoint(state *types.IndexerState, ops []*type
 	}
 	return retryLifecycleWrite(s.db, func(txn *badger.Txn) error {
 		if err := writeLifecycleObservations(txn, observations); err != nil {
+			return err
+		}
+		if err := writeUnresolvedN3TokenClaims(txn, unresolved); err != nil {
 			return err
 		}
 		for _, op := range normalized {

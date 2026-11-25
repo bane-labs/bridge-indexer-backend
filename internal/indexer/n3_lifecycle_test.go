@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
+	"github.com/bane-labs/bridge-indexer-backend/internal/monitor"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/nspcc-dev/neo-go/pkg/core/state"
@@ -233,5 +235,105 @@ func TestN3TokenDistributionPairIsolation(t *testing.T) {
 	}
 	if first.Distribution == nil || first.Claimable != nil || second.Claimable == nil || second.Distribution != nil {
 		t.Fatalf("mixed pairs: %+v %+v", first, second)
+	}
+}
+
+func TestN3HistoricalTokenClaimDoesNotBlockCheckpoint(t *testing.T) {
+	opts := badger.DefaultOptions("").WithInMemory(true)
+	opts.Logger = nil
+	db, err := badger.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := datastore.NewStoreFromDB(db, slog.Default())
+	os := datastore.NewOperationStore(store, nil)
+	idx := &N3Indexer{store: store, opStore: os, logger: slog.Default()}
+	token, _ := util.Uint160DecodeStringLE(testNeoXBridgeHash)
+	observed := n3Fixture(t, n3Event(token, "TokenClaim", n3Bytes(2, 20), n3Int(11), n3Bytes(9, 20), n3Int(100)))
+	sourceToken, _ := n3Token([]stackitem.Item{n3Bytes(3, 20)}, 0)
+	id := observed[0].Identity
+	id.SourceToken = sourceToken
+	source := &types.BridgeOperation{BridgeType: id.BridgeType, Direction: id.Direction, Nonce: id.Nonce, SourceChain: "neo_x", DestinationChain: "neo_n3", TokenContract: &id.SourceToken, DestTokenContract: &id.DestinationToken, Status: types.StatusPending}
+	if err := os.SaveOperation(source); err != nil {
+		t.Fatal(err)
+	}
+	state := &types.IndexerState{Chain: chainN3, LastBlockHeight: 101, LastBlockHash: "block-n3"}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := idx.applyProcessedBlockWithLifecycle(state, nil, observed); err != nil {
+			t.Fatalf("attempt %d blocked: %v", attempt, err)
+		}
+	}
+	persisted, err := store.GetIndexerState(chainN3)
+	if err != nil || persisted.LastBlockHeight != 101 {
+		t.Fatalf("checkpoint not advanced: %+v %v", persisted, err)
+	}
+	if _, err := os.GetLifecycle(id); err != datastore.ErrNotFound {
+		t.Fatalf("fabricated claim: %v", err)
+	}
+	operation, err := os.GetOperation(id.BridgeType, id.Direction, id.Nonce)
+	if err != nil || operation.Status != types.StatusPending {
+		t.Fatalf("unknown legacy outcome: %+v %v", operation, err)
+	}
+	gaps, err := store.ListUnresolvedN3TokenClaims()
+	if err != nil || len(gaps) != 1 || gaps[0].Nonce != 11 || gaps[0].Evidence.TxHash != "tx-n3" || gaps[0].Reason != "missing_claimable_pair" {
+		t.Fatalf("unresolved evidence lost: %+v %v", gaps, err)
+	}
+}
+
+func TestN3VerifiedRootsMatchNeoXSourceBytes(t *testing.T) {
+	opts := badger.DefaultOptions("").WithInMemory(true)
+	opts.Logger = nil
+	db, err := badger.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := datastore.NewStoreFromDB(db, slog.Default())
+	bs := datastore.NewBridgeStateStore(store)
+	sourceRoot := "0x" + strings.Repeat("AB", 32)
+	instance := datastore.BuildInstanceID("native", "neo_x", "neo_n3", nil, nil)
+	if err := bs.SaveBridgeState(&types.DirectionalBridgeState{InstanceID: instance, BridgeType: types.BridgeTypeNative, SrcChain: "neo_x", DstChain: "neo_n3", SourceState: &types.ChainState{Nonce: 11, Root: &sourceRoot}}); err != nil {
+		t.Fatal(err)
+	}
+	token, _ := util.Uint160DecodeStringLE(testNeoXBridgeHash)
+	obs := n3Fixture(t, n3Event(token, "NativeWithdrawalRootUpdate", n3Int(11), n3Bytes(0xab, 32)))
+	checkpoint := &types.IndexerState{Chain: chainN3, LastBlockHeight: 101, LastBlockHash: "block-n3"}
+	if err := store.SaveN3LifecycleCheckpoint(checkpoint, nil, nil, obs); err != nil {
+		t.Fatal(err)
+	}
+	sync, err := monitor.NewSyncComputer(bs, slog.Default()).ComputeAll()
+	if err != nil || len(sync) != 1 {
+		t.Fatalf("sync: %+v %v", sync, err)
+	}
+	if sync[0].Status != types.DirectionalSyncStatusSynced || sync[0].DstBlockNumber == nil || *sync[0].DstBlockNumber != 101 {
+		t.Fatalf("equal root bytes reported mismatch: %+v", sync[0])
+	}
+}
+
+func TestN3TokenClaimRootDoesNotSubstituteForClaimable(t *testing.T) {
+	opts := badger.DefaultOptions("").WithInMemory(true)
+	opts.Logger = nil
+	db, err := badger.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := datastore.NewStoreFromDB(db, slog.Default())
+	os := datastore.NewOperationStore(store, nil)
+	idx := &N3Indexer{store: store, opStore: os, logger: slog.Default()}
+	token, _ := util.Uint160DecodeStringLE(testNeoXBridgeHash)
+	obs := n3Fixture(t, n3Event(token, "TokenWithdrawalRootUpdate", n3Bytes(2, 20), n3Bytes(3, 20), n3Int(11), n3Bytes(4, 32)), n3Event(token, "TokenClaim", n3Bytes(2, 20), n3Int(11), n3Bytes(9, 20), n3Int(100)))
+	checkpoint := &types.IndexerState{Chain: chainN3, LastBlockHeight: 101, LastBlockHash: "block-n3"}
+	if err := idx.applyProcessedBlockWithLifecycle(checkpoint, nil, obs); err != nil {
+		t.Fatal(err)
+	}
+	lifecycle, err := os.GetLifecycle(obs[0].Identity)
+	if err != nil || lifecycle.Settlement == nil || lifecycle.Claim != nil {
+		t.Fatalf("root inferred claim: %+v %v", lifecycle, err)
+	}
+	unresolved, err := store.ListUnresolvedN3TokenClaims()
+	if err != nil || len(unresolved) != 1 {
+		t.Fatalf("missing unresolved claim: %+v %v", unresolved, err)
 	}
 }
