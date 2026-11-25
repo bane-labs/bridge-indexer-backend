@@ -29,6 +29,8 @@ func traceEndpoint(t *testing.T, supportsTrace bool, calls *atomic.Int32) *httpt
 		switch {
 		case req.Method == "eth_blockNumber":
 			resp["result"] = "0x10"
+		case req.Method == "eth_chainId":
+			resp["result"] = "0xba93"
 		case req.Method == "debug_traceBlockByNumber" && supportsTrace:
 			calls.Add(1)
 			resp["result"] = []any{}

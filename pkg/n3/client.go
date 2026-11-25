@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,6 +22,8 @@ import (
 type pooledRPC struct {
 	client     *rpcclient.Client
 	lastCallNs atomic.Int64
+	endpoint   string
+	network    uint32
 }
 
 // Client wraps a pool of Neo N3 RPC connections for concurrent use.
@@ -33,6 +36,9 @@ type Client struct {
 	callInterval time.Duration
 	cache        *blockcache.Cache
 	cacheReads   bool // true when the cache has data worth reading
+	// network is the magic shared by every pooled connection (checked at
+	// construction; the pool never adds connections later).
+	network uint32
 }
 
 // SetCache attaches an optional block cache. When set, GetBlockByIndex and
@@ -90,9 +96,14 @@ func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *sl
 				logger.Warn("Failed to init Neo N3 RPC client", "endpoint", ep, "poolIdx", i, "error", err)
 				return
 			}
+			v, err := rpc.GetVersion()
+			if err != nil {
+				logger.Warn("Neo N3 RPC did not report its network", "endpoint", ep, "poolIdx", i, "error", err)
+				return
+			}
 			logger.Info("Pool connection established", "endpoint", ep, "poolIdx", i)
 			mu.Lock()
-			pool = append(pool, &pooledRPC{client: rpc})
+			pool = append(pool, &pooledRPC{client: rpc, endpoint: ep, network: uint32(v.Protocol.Network)})
 			mu.Unlock()
 		}(i)
 	}
@@ -101,6 +112,19 @@ func NewClient(ctx context.Context, endpoints []string, poolSize int, logger *sl
 	if len(pool) == 0 {
 		return nil, fmt.Errorf("failed to connect to any Neo N3 endpoint (tried %d connections across %d endpoints)", poolSize, len(endpoints))
 	}
+	networks := map[uint32][]string{}
+	for _, p := range pool {
+		if !slices.Contains(networks[p.network], p.endpoint) {
+			networks[p.network] = append(networks[p.network], p.endpoint)
+		}
+	}
+	if len(networks) > 1 {
+		for _, p := range pool {
+			p.client.Close()
+		}
+		return nil, fmt.Errorf("Neo N3 endpoints are on different networks (network magic to endpoints: %v)", networks)
+	}
+	c.network = pool[0].network
 
 	c.pool = pool
 	logger.Info("Neo N3 connection pool ready", "active", len(pool), "requested", poolSize)
@@ -170,15 +194,9 @@ func (c *Client) waitForPacing(ctx context.Context, conn *pooledRPC) error {
 	return nil
 }
 
-// Network returns the N3 network magic (getversion).
-func (c *Client) Network(ctx context.Context) (uint32, error) {
-	return retry(c, ctx, func(rpc *rpcclient.Client) (uint32, error) {
-		v, err := rpc.GetVersion()
-		if err != nil {
-			return 0, err
-		}
-		return uint32(v.Protocol.Network), nil
-	})
+// Network returns the network magic shared by every pooled connection.
+func (c *Client) Network(context.Context) (uint32, error) {
+	return c.network, nil
 }
 
 func (c *Client) GetBlockCount(ctx context.Context) (uint32, error) {

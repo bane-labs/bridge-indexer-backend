@@ -36,6 +36,22 @@ type Client struct {
 	// again after reporting that debug tracing does not exist there.
 	traceMu          sync.Mutex
 	traceUnsupported map[string]time.Time
+
+	// chainID is pinned at construction: every endpoint the client uses,
+	// including after failover, must report it.
+	chainID uint64
+}
+
+const chainIDTimeout = 15 * time.Second
+
+func endpointChainID(ctx context.Context, eth *ethclient.Client) (uint64, error) {
+	ctx, cancel := context.WithTimeout(ctx, chainIDTimeout)
+	defer cancel()
+	id, err := eth.ChainID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return id.Uint64(), nil
 }
 
 // ErrTraceUnsupported reports that the active endpoint does not provide
@@ -71,6 +87,33 @@ func NewClient(ctx context.Context, endpoints []string, logger *slog.Logger, cal
 		callInterval: callInterval,
 	}
 
+	// Every reachable endpoint must be on the same network. An endpoint that
+	// cannot answer now is checked when failover first reaches it.
+	networks := map[uint64][]string{}
+	for _, ep := range endpoints {
+		eth, err := ethclient.DialContext(ctx, ep)
+		if err != nil {
+			logger.Warn("Failed to connect to Neo X RPC", "endpoint", ep, "error", err)
+			continue
+		}
+		id, err := endpointChainID(ctx, eth)
+		eth.Close()
+		if err != nil {
+			logger.Warn("Neo X RPC did not report its chain ID", "endpoint", ep, "error", err)
+			continue
+		}
+		networks[id] = append(networks[id], ep)
+	}
+	if len(networks) == 0 {
+		return nil, fmt.Errorf("failed to connect to any Neo X endpoint: none reported a chain ID")
+	}
+	if len(networks) > 1 {
+		return nil, fmt.Errorf("Neo X endpoints are on different networks (chain ID to endpoints: %v)", networks)
+	}
+	for id := range networks {
+		c.chainID = id
+	}
+
 	if err := c.connect(ctx, 0); err != nil {
 		return nil, fmt.Errorf("failed to connect to any Neo X endpoint: %w", err)
 	}
@@ -86,6 +129,13 @@ func (c *Client) connect(ctx context.Context, startIdx int) error {
 		eth, err := ethclient.DialContext(ctx, ep)
 		if err != nil {
 			c.logger.Warn("Failed to connect to Neo X RPC", "endpoint", ep, "error", err)
+			continue
+		}
+		// Never switch to an endpoint on another network.
+		id, err := endpointChainID(ctx, eth)
+		if err != nil || id != c.chainID {
+			eth.Close()
+			c.logger.Warn("Skipping Neo X RPC endpoint: chain ID unavailable or different", "endpoint", ep, "chain_id", id, "expected", c.chainID, "error", err)
 			continue
 		}
 
@@ -131,13 +181,10 @@ func retryEVM[T any](c *Client, ctx context.Context, op func() (T, error)) (T, e
 	return zero, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
 }
 
-// ChainID returns the chain's EIP-155 chain ID.
-func (c *Client) ChainID(ctx context.Context) (uint64, error) {
-	id, err := retryEVM(c, ctx, func() (*big.Int, error) { return c.eth.ChainID(ctx) })
-	if err != nil {
-		return 0, err
-	}
-	return id.Uint64(), nil
+// ChainID returns the EIP-155 chain ID shared by every endpoint the client
+// uses (checked at construction and on each failover).
+func (c *Client) ChainID(context.Context) (uint64, error) {
+	return c.chainID, nil
 }
 
 func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
