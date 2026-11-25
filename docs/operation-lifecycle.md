@@ -1,6 +1,6 @@
 # Settlement and execution
 
-## Implementation status: Neo X decoder batch
+## Implementation status: Neo X and Neo N3 decoder batches
 
 The datastore now has additive `lifecycle:v1:*` records keyed by bridge type,
 direction, nonce, and (for tokens) both token contracts. They preserve distinct
@@ -38,10 +38,18 @@ declares `Execution(uint256,(bool,bytes))`. No verified deployed ABI for the
 old indexer signature `Execution(uint256,uint8)` has been identified, so an
 observed event with that signature stops the checkpoint instead of interpreting
 it as the tuple. These limits mean the live checkpoint does **not** certify
-complete historical coverage. The API, Swagger, frontend, legacy monitor and
-webhook logic remain unchanged. N3 decoding, bounded historical recovery and
-verified cutover remain prerequisites to the public projection and relay-stuck
-precedence.
+complete historical coverage. The N3 live indexer now records received roots,
+distribution, claimability, emitted claims, and typed or chunked message
+execution atomically with its checkpoint and legacy updates. It fetches
+application logs for every transaction, including indirect calls. Missing logs
+and malformed watched notifications stop the checkpoint. A committed token claim
+without a verified claimable pair is retained as an unresolved notification
+alongside the checkpoint; its lifecycle claim stays unknown until recovery.
+A received root replaces same-nonce synthetic
+destination state. The NEO withdrawal nonce 11 receipt remains unverified and
+is not included as a fixture. No public API fields or alert and webhook rules
+change. Bounded historical recovery and verified
+cutover remain prerequisites to the public projection and relay-stuck precedence.
 
 This document records the lifecycle contract adopted for backend issues [#28](https://github.com/bane-labs/bridge-indexer-backend/issues/28) and [#29](https://github.com/bane-labs/bridge-indexer-backend/issues/29), and frontend issues [#9](https://github.com/bane-labs/bridge-indexer-frontend/issues/9) and [#17](https://github.com/bane-labs/bridge-indexer-frontend/issues/17). It specifies the implementation to follow. The current operation API still exposes the legacy completion model.
 
@@ -199,6 +207,8 @@ Maintain a recovery manifest separately for Neo N3 and Neo X. Record chain ident
 - After restart, live observations and their coverage/checkpoint advancement remain atomic. Events in blocks beyond the captured targets are processed normally. A gap or target-hash mismatch invalidates the affected coverage and requires replay before negative execution conclusions or relay-stuck assessment can resume.
 
 Recovery is complete only when every required destination interval is contiguous through its captured cutover target, every implementation version and required evidence path is supported, no required operation remains unresolved, and normal indexing resumes contiguously. Each subsequent complete live watermark extends that coverage. Recovery progress output must expose chain, start, target, contiguous height, and unresolved count.
+
+Reconcile durable `lifecycle_unresolved:v1:neo_n3:token_claim:*` notifications against historical claimable evidence before claiming N3 execution coverage. A live checkpoint can advance past these notifications, but that checkpoint alone cannot certify a negative execution outcome for the affected interval.
 
 Recovery tests must include a destination outcome added after the rehearsal snapshot but before production cutover, an interrupted replay with a normal checkpoint ahead of its recovery watermark, and a failed trace or block fetch inside an otherwise complete range. Each incomplete case must keep the new negative projection and operation-stuck alerts unavailable. Only a verified contiguous replay and handoff may enable them. Exercise both chains with different numeric height ranges.
 

@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -284,5 +285,20 @@ func TestSyncComputer_SyntheticDestination(t *testing.T) {
 			got.DstBlockNumber != nil || got.DstObservedAt != nil || got.SrcObservedAt == nil {
 			t.Fatalf("marked=%v: unexpected synthetic observation: %+v", marked, got)
 		}
+	}
+}
+
+func TestSyncComputer_RootByteComparison(t *testing.T) {
+	source := "0x" + strings.Repeat("Ab", 32)
+	received := strings.Repeat("ab", 32)
+	different := strings.Repeat("cd", 32)
+	sc := &SyncComputer{}
+	state := types.DirectionalBridgeState{BridgeType: types.BridgeTypeToken, SrcChain: "neo_x", DstChain: "neo_n3", SourceState: &types.ChainState{Nonce: 11, Root: &source}, DestState: &types.ChainState{Nonce: 11, Root: &received}}
+	if got := sc.computeOne(state); got.Status != types.DirectionalSyncStatusSynced {
+		t.Fatalf("equivalent roots: %+v", got)
+	}
+	state.DestState.Root = &different
+	if got := sc.computeOne(state); got.Status != types.DirectionalSyncStatusRootMismatch {
+		t.Fatalf("different roots: %+v", got)
 	}
 }

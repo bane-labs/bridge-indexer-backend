@@ -1,8 +1,11 @@
 package monitor
 
 import (
+	"bytes"
+	"encoding/hex"
 	"log/slog"
 	"sort"
+	"strings"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
@@ -114,6 +117,13 @@ func rootsEqual(a, b *string) bool {
 	}
 	if a == nil || b == nil {
 		return false
+	}
+	// Historical records use both prefixed and unprefixed hex. Compare root
+	// bytes when possible without rewriting persisted source observations.
+	first, firstErr := hex.DecodeString(strings.TrimPrefix(strings.TrimPrefix(*a, "0x"), "0X"))
+	second, secondErr := hex.DecodeString(strings.TrimPrefix(strings.TrimPrefix(*b, "0x"), "0X"))
+	if firstErr == nil && secondErr == nil {
+		return bytes.Equal(first, second)
 	}
 	return *a == *b
 }

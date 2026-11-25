@@ -1,13 +1,14 @@
 package indexer
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/nspcc-dev/neo-go/pkg/core/state"
 	"github.com/nspcc-dev/neo-go/pkg/core/transaction"
 	"github.com/nspcc-dev/neo-go/pkg/util"
 	"github.com/nspcc-dev/neo-go/pkg/vm/vmstate"
@@ -36,10 +37,11 @@ type N3Indexer struct {
 }
 
 type n3BlockResult struct {
-	height uint32
-	state  *types.IndexerState
-	ops    []*types.BridgeOperation
-	err    error
+	height       uint32
+	state        *types.IndexerState
+	ops          []*types.BridgeOperation
+	observations []datastore.LifecycleObservation
+	err          error
 }
 
 func NewN3Indexer(
@@ -169,7 +171,7 @@ func (idx *N3Indexer) runSerial(ctx context.Context, startHeight uint32) error {
 					height = r.height
 					goto nextOuterTick
 				}
-				if err := idx.applyProcessedBlock(r.state, r.ops); err != nil {
+				if err := idx.applyProcessedBlockWithLifecycle(r.state, r.ops, r.observations); err != nil {
 					idx.logger.Error("Failed to persist N3 block", "height", r.height, "error", err)
 					time.Sleep(5 * time.Second)
 					// Retry from failed height.
@@ -184,31 +186,76 @@ func (idx *N3Indexer) runSerial(ctx context.Context, startHeight uint32) error {
 }
 
 func (idx *N3Indexer) processBlock(ctx context.Context, height uint32) error {
-	state, ops, err := idx.processBlockWithResult(ctx, height)
+	state, ops, observations, err := idx.processBlockWithLifecycle(ctx, height)
 	if err != nil {
 		return err
 	}
-	return idx.applyProcessedBlock(state, ops)
+	return idx.applyProcessedBlockWithLifecycle(state, ops, observations)
 }
 
 func (idx *N3Indexer) applyProcessedBlock(state *types.IndexerState, ops []*types.BridgeOperation) error {
-	if len(ops) > 0 {
-		extraOps, bsErr := idx.buildBridgeStateWriteOps(ops)
-		if bsErr != nil {
-			return fmt.Errorf("build bridge state write ops: %w", bsErr)
+	return idx.applyProcessedBlockWithLifecycle(state, ops, nil)
+}
+
+func (idx *N3Indexer) applyProcessedBlockWithLifecycle(state *types.IndexerState, ops []*types.BridgeOperation, observations []datastore.LifecycleObservation) error {
+	resolved := make([]datastore.LifecycleObservation, 0, len(observations))
+	var unresolved []datastore.UnresolvedN3TokenClaim
+	for i := range observations {
+		o := &observations[i]
+		if o.Fact != datastore.FactClaim || o.Identity.BridgeType != types.BridgeTypeToken {
+			resolved = append(resolved, *o)
+			continue
 		}
-		if len(extraOps) > 0 {
-			if err := idx.store.SaveIndexerStateWithOperationsAndExtra(state, ops, extraOps); err != nil {
-				return fmt.Errorf("save state with ops: %w", err)
-			}
-		} else {
-			if err := idx.store.SaveIndexerStateWithOperations(state, ops); err != nil {
-				return fmt.Errorf("save state with ops: %w", err)
+		var pair *datastore.OperationIdentity
+		ambiguous := false
+		for j := range observations {
+			candidate := &observations[j]
+			if candidate.Fact == datastore.FactClaimable && candidate.Identity.BridgeType == types.BridgeTypeToken && candidate.Identity.Nonce == o.Identity.Nonce && candidate.Identity.DestinationToken == o.Identity.DestinationToken {
+				if pair != nil {
+					ambiguous = true
+					break
+				}
+				copy := candidate.Identity
+				pair = &copy
 			}
 		}
-	} else {
-		if err := idx.store.SaveIndexerState(state); err != nil {
-			return fmt.Errorf("save state: %w", err)
+		if !ambiguous {
+			stored, err := idx.opStore.FindClaimableTokenPairForDirection(types.DirectionWithdrawal, o.Identity.Nonce, o.Identity.DestinationToken)
+			if err != nil {
+				if !errors.Is(err, datastore.ErrAmbiguousClaimPair) {
+					return err
+				}
+				ambiguous = true
+			} else if pair != nil && stored != nil && *pair != *stored {
+				ambiguous = true
+			} else if pair == nil {
+				pair = stored
+			}
+		}
+		if pair != nil && o.Identity.SourceToken != "" && o.Identity.SourceToken != pair.SourceToken {
+			ambiguous = true
+		}
+		if pair == nil || ambiguous {
+			reason := "missing_claimable_pair"
+			if ambiguous {
+				reason = "ambiguous_claimable_pair"
+			}
+			unresolved = append(unresolved, datastore.UnresolvedN3TokenClaim{Nonce: o.Identity.Nonce, DestinationToken: o.Identity.DestinationToken, Evidence: o.Evidence, Reason: reason})
+			continue
+		}
+		o.Identity = *pair
+		resolved = append(resolved, *o)
+	}
+	extra, err := idx.buildBridgeStateWriteOps(ops)
+	if err != nil {
+		return err
+	}
+	if err := idx.store.SaveN3LifecycleCheckpoint(state, ops, extra, resolved, unresolved...); err != nil {
+		return fmt.Errorf("save N3 lifecycle checkpoint: %w", err)
+	}
+	for _, claim := range unresolved {
+		if idx.logger != nil {
+			idx.logger.Warn("N3 token claim awaits historical pair recovery", "nonce", claim.Nonce, "destination_token", claim.DestinationToken, "tx", claim.Evidence.TxHash, "reason", claim.Reason)
 		}
 	}
 	return nil
@@ -232,12 +279,13 @@ func (idx *N3Indexer) processBlockBatchWithResult(ctx context.Context, from, to 
 		go func() {
 			defer wg.Done()
 			for h := range jobs {
-				state, ops, err := idx.processBlockWithResult(ctx, h)
+				state, ops, observations, err := idx.processBlockWithLifecycle(ctx, h)
 				results[int(h-from)] = n3BlockResult{
-					height: h,
-					state:  state,
-					ops:    ops,
-					err:    err,
+					height:       h,
+					state:        state,
+					ops:          ops,
+					observations: observations,
+					err:          err,
 				}
 			}
 		}()
@@ -297,9 +345,14 @@ func (idx *N3Indexer) blockWorkerCount() int {
 }
 
 func (idx *N3Indexer) processBlockWithResult(ctx context.Context, height uint32) (*types.IndexerState, []*types.BridgeOperation, error) {
+	state, ops, _, err := idx.processBlockWithLifecycle(ctx, height)
+	return state, ops, err
+}
+
+func (idx *N3Indexer) processBlockWithLifecycle(ctx context.Context, height uint32) (*types.IndexerState, []*types.BridgeOperation, []datastore.LifecycleObservation, error) {
 	blk, err := idx.client.GetBlockByIndex(ctx, height)
 	if err != nil {
-		return nil, nil, fmt.Errorf("get block %d: %w", height, err)
+		return nil, nil, nil, fmt.Errorf("get block %d: %w", height, err)
 	}
 
 	// Empty block, no need for any RPC calls
@@ -314,12 +367,14 @@ func (idx *N3Indexer) processBlockWithResult(ctx context.Context, height uint32)
 		if height%1000 == 0 {
 			idx.logger.Info("N3 indexer progress", "height", height)
 		}
-		return state, nil, nil
+		return state, nil, nil, nil
 	}
 
 	// Concurrent AppLog fetching for multiple transactions
 	type txResult struct {
-		ops []*types.BridgeOperation
+		ops          []*types.BridgeOperation
+		observations []datastore.LifecycleObservation
+		err          error
 	}
 	txResults := make([]txResult, len(blk.Transactions))
 	var wg sync.WaitGroup
@@ -331,51 +386,30 @@ func (idx *N3Indexer) processBlockWithResult(ctx context.Context, height uint32)
 		go func(i int, tx *transaction.Transaction) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			// Pre-filter: skip transactions whose Script doesn't contain any watched contract hash
-			if !idx.txMayInvokeContracts(tx.Script, idx.contracts) {
-				return
-			}
 			txHash := tx.Hash()
 			appLog, err := idx.client.GetApplicationLog(ctx, txHash)
 			if err != nil {
-				idx.logger.Warn("Failed to get app log", "tx", txHash.StringLE(), "error", err)
+				txResults[i].err = fmt.Errorf("get application log %s: %w", txHash.StringLE(), err)
 				return
 			}
-			var ops []*types.BridgeOperation
-			for _, exec := range appLog.Executions {
-				if exec.VMState != vmstate.Halt {
-					continue
-				}
-				for _, event := range exec.Events {
-					if !idx.isWatchedContract(event.ScriptHash) {
-						continue
-					}
-					if idx.processor == nil {
-						continue
-					}
-					blockTime := time.UnixMilli(int64(blk.Timestamp))
-					op, err := idx.processor.ProcessEvent(event, height, txHash.StringLE(), blockTime)
-					if err != nil {
-						idx.logger.Warn("Failed to process event",
-							"event", event.Name,
-							"tx", txHash.StringLE(),
-							"error", err,
-						)
-						continue
-					}
-					if op != nil {
-						ops = append(ops, op)
-					}
-				}
+			if appLog == nil || len(appLog.Executions) == 0 || !appLog.Container.Equals(txHash) {
+				txResults[i].err = fmt.Errorf("missing or mismatched application log for %s", txHash.StringLE())
+				return
 			}
-			txResults[i] = txResult{ops: ops}
+			ops, observations, err := idx.decodeN3Executions(appLog.Executions, height, blk.Hash().StringLE(), txHash.StringLE(), time.UnixMilli(int64(blk.Timestamp)))
+			txResults[i] = txResult{ops: ops, observations: observations, err: err}
 		}(i, tx)
 	}
 	wg.Wait()
 
 	var allOps []*types.BridgeOperation
+	var allObservations []datastore.LifecycleObservation
 	for _, r := range txResults {
+		if r.err != nil {
+			return nil, nil, nil, r.err
+		}
 		allOps = append(allOps, r.ops...)
+		allObservations = append(allObservations, r.observations...)
 	}
 
 	state := &types.IndexerState{
@@ -390,19 +424,47 @@ func (idx *N3Indexer) processBlockWithResult(ctx context.Context, height uint32)
 		idx.logger.Info("N3 indexer progress", "height", height)
 	}
 
-	return state, allOps, nil
+	return state, allOps, allObservations, nil
 }
 
-// txMayInvokeContracts checks if a transaction's Script bytecode may invoke any watched contracts.
-// This is a conservative pre-filter: false positives are possible (extra AppLog calls),
-// but false negatives are not (will never skip a transaction that actually invokes a watched contract).
-func (idx *N3Indexer) txMayInvokeContracts(script []byte, contracts []util.Uint160) bool {
-	for _, c := range contracts {
-		if bytes.Contains(script, c[:]) {
-			return true
+// decodeN3Executions reads notifications by emitting contract. The invoking
+// script can call the bridge indirectly without containing its contract hash.
+func (idx *N3Indexer) decodeN3Executions(executions []state.Execution, height uint32, blockHash, txHash string, blockTime time.Time) ([]*types.BridgeOperation, []datastore.LifecycleObservation, error) {
+	var ops []*types.BridgeOperation
+	var observations []datastore.LifecycleObservation
+	for execIndex, execution := range executions {
+		if execution.VMState != vmstate.Halt {
+			continue
+		}
+		var notifications []n3Notification
+		for eventIndex, event := range execution.Events {
+			if !idx.isWatchedContract(event.ScriptHash) {
+				continue
+			}
+			notifications = append(notifications, n3Notification{event: event, position: fmt.Sprintf("%d:%d", execIndex, eventIndex)})
+			if idx.processor == nil {
+				continue
+			}
+			if event.ScriptHash.Equals(idx.processor.neoXBridge) && (event.Name == "NativeDeposit" || event.Name == "TokenDeposit") ||
+				event.ScriptHash.Equals(idx.processor.messageBridge) && event.Name == "MessageSend" {
+				op, err := idx.processor.ProcessEvent(event, height, txHash, blockTime)
+				if err != nil {
+					return nil, nil, fmt.Errorf("decode %s in %s: %w", event.Name, txHash, err)
+				}
+				if op != nil {
+					ops = append(ops, op)
+				}
+			}
+		}
+		if idx.processor != nil {
+			decoded, err := decodeN3LifecycleTransaction(notifications, idx.processor.neoXBridge, idx.processor.messageBridge, height, blockHash, txHash, blockTime)
+			if err != nil {
+				return nil, nil, fmt.Errorf("decode N3 lifecycle in %s: %w", txHash, err)
+			}
+			observations = append(observations, decoded...)
 		}
 	}
-	return false
+	return ops, observations, nil
 }
 
 func (idx *N3Indexer) isWatchedContract(hash util.Uint160) bool {
