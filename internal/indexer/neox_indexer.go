@@ -260,76 +260,99 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 			if h := headerCache[height]; h != nil && h.Hash() != block.Hash() {
 				return nil, nil, nil, fmt.Errorf("claim block hash mismatch %d", height)
 			}
-			for _, tx := range block.Transactions() {
-				if tx.To() == nil || *tx.To() != idx.processor.tokenBridge || len(tx.Data()) != 68 || string(tx.Data()[:4]) != string(claimTokenSelector) {
-					continue
+			traces, err := idx.client.TraceBlock(ctx, height)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("claim traces at block %d: %w", height, err)
+			}
+			if err := verifyBlockClaimTraces(block, traces); err != nil {
+				return nil, nil, nil, fmt.Errorf("claim traces at block %d: %w", height, err)
+			}
+			for txIndex, tx := range block.Transactions() {
+				trace := traces[txIndex]
+				calls := claimTraceCalls(trace.Result, idx.processor.tokenBridge)
+				if tx.To() != nil && *tx.To() == idx.processor.tokenBridge && len(tx.Data()) == 68 && string(tx.Data()[:4]) == string(claimTokenSelector) && trace.Result.Error == "" {
+					calls = append([]claimTraceCall{{Input: tx.Data(), Position: "top-level"}}, calls...)
 				}
-				n, err := wordNonce(common.BytesToHash(tx.Data()[36:68]))
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				token := common.BytesToAddress(tx.Data()[16:36]).Hex()
-				pair, err := idx.opStore.FindClaimableTokenPair(n, token)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				if pair == nil {
-					for _, o := range observations {
-						if o.Fact == datastore.FactClaimable && o.Evidence.BlockHeight <= height && o.Identity.Nonce == n && common.HexToAddress(o.Identity.DestinationToken) == common.HexToAddress(token) {
-							id := o.Identity
-							pair = &id
-							break
-						}
+				for _, call := range calls {
+					if len(call.Input) != 68 || string(call.Input[:4]) != string(claimTokenSelector) {
+						continue
 					}
-				}
-				if pair == nil {
-					continue
-				} // historical claims require recovery of the original claimable
-				var claimable *datastore.LifecycleEvidence
-				for _, o := range observations {
-					if o.Fact == datastore.FactClaimable && o.Identity == *pair && o.Evidence.BlockHeight <= height {
-						copy := o.Evidence
-						claimable = &copy
-						break
+					if new(big.Int).SetBytes(call.Input[4:16]).Sign() != 0 {
+						return nil, nil, nil, fmt.Errorf("invalid claim token address in trace")
 					}
-				}
-				if claimable == nil {
-					prior, err := idx.opStore.GetLifecycle(*pair)
+					if tx.To() != nil && *tx.To() == idx.processor.tokenBridge && call.Position != "top-level" {
+						continue
+					} // proxy internal calls are not separate claims
+					if trace.Result.Error != "" {
+						continue
+					}
+					n, err := wordNonce(common.BytesToHash(call.Input[36:68]))
 					if err != nil {
 						return nil, nil, nil, err
 					}
-					claimable = prior.Claimable
-				}
-				if claimable == nil || claimable.BlockHeight > height {
-					continue
-				}
-				receipt, err := idx.client.TransactionReceipt(ctx, tx.Hash())
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				if receipt.BlockHash != block.Hash() || receipt.BlockNumber.Uint64() != height {
-					return nil, nil, nil, fmt.Errorf("claim receipt provenance mismatch")
-				}
-				if receipt.Status != ethtypes.ReceiptStatusSuccessful {
-					continue
-				}
-				// An end-of-block EIP-1967 lookup cannot identify the active
-				// implementation at a claim if this proxy upgraded in the block.
-				for _, observed := range logs {
-					if observed.BlockNumber == height && observed.Address == idx.processor.tokenBridge && len(observed.Topics) > 0 && observed.Topics[0] == sigProxyUpgrade {
-						return nil, nil, nil, fmt.Errorf("implementation changed in claim block %d", height)
+					token := common.BytesToAddress(call.Input[16:36]).Hex()
+					pair, err := idx.opStore.FindClaimableTokenPair(n, token)
+					if err != nil {
+						return nil, nil, nil, err
 					}
-				}
-				impl, err := idx.client.StorageAt(ctx, idx.processor.tokenBridge, common.HexToHash("0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"), new(big.Int).SetUint64(height))
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				claim, err := decodeDirectTokenClaim(tx, receipt, idx.processor.tokenBridge, common.BytesToAddress(impl), time.Unix(int64(block.Time()), 0), pair, claimable)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				if claim != nil {
-					observations = append(observations, *claim)
+					if pair == nil {
+						for _, o := range observations {
+							if o.Fact == datastore.FactClaimable && o.Evidence.BlockHeight <= height && o.Identity.Nonce == n && common.HexToAddress(o.Identity.DestinationToken) == common.HexToAddress(token) {
+								id := o.Identity
+								pair = &id
+								break
+							}
+						}
+					}
+					if pair == nil {
+						continue
+					} // historical claims require recovery of the original claimable
+					var claimable *datastore.LifecycleEvidence
+					for _, o := range observations {
+						if o.Fact == datastore.FactClaimable && o.Identity == *pair && o.Evidence.BlockHeight <= height {
+							copy := o.Evidence
+							claimable = &copy
+							break
+						}
+					}
+					if claimable == nil {
+						prior, err := idx.opStore.GetLifecycle(*pair)
+						if err != nil {
+							return nil, nil, nil, err
+						}
+						claimable = prior.Claimable
+					}
+					if claimable == nil || claimable.BlockHeight > height {
+						continue
+					}
+					receipt, err := idx.client.TransactionReceipt(ctx, tx.Hash())
+					if err != nil {
+						return nil, nil, nil, err
+					}
+					if receipt.BlockHash != block.Hash() || receipt.BlockNumber.Uint64() != height {
+						return nil, nil, nil, fmt.Errorf("claim receipt provenance mismatch")
+					}
+					if receipt.Status != ethtypes.ReceiptStatusSuccessful {
+						continue
+					}
+					// An end-of-block EIP-1967 lookup cannot identify the active
+					// implementation at a claim if this proxy upgraded in the block.
+					for _, observed := range logs {
+						if observed.BlockNumber == height && observed.Address == idx.processor.tokenBridge && len(observed.Topics) > 0 && observed.Topics[0] == sigProxyUpgrade {
+							return nil, nil, nil, fmt.Errorf("implementation changed in claim block %d", height)
+						}
+					}
+					impl, err := idx.client.StorageAt(ctx, idx.processor.tokenBridge, common.HexToHash("0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"), new(big.Int).SetUint64(height))
+					if err != nil {
+						return nil, nil, nil, err
+					}
+					claim, err := decodeTokenClaimCall(tx, receipt, idx.processor.tokenBridge, common.BytesToAddress(impl), time.Unix(int64(block.Time()), 0), pair, claimable, call.Input, call.Position)
+					if err != nil {
+						return nil, nil, nil, err
+					}
+					if claim != nil {
+						observations = append(observations, *claim)
+					}
 				}
 			}
 		}

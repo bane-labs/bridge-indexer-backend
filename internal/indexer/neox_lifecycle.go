@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
+	"github.com/bane-labs/bridge-indexer-backend/pkg/neox"
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -271,17 +273,64 @@ func decodeDirectTokenClaim(tx *ethtypes.Transaction, receipt *ethtypes.Receipt,
 	if tx.To() == nil || *tx.To() != bridge || len(tx.Data()) != 68 || string(tx.Data()[:4]) != string(claimTokenSelector) {
 		return nil, nil
 	}
+	return decodeTokenClaimCall(tx, receipt, bridge, implementation, blockTime, pair, claimable, tx.Data(), "top-level")
+}
+
+// claimTraceCalls returns only successful external bridge calls with successful
+// ancestors. Paths count child calls from the top-level transaction frame.
+type claimTraceCall struct {
+	Input    []byte
+	Position string
+}
+
+func verifyBlockClaimTraces(block *ethtypes.Block, traces []neox.TransactionTrace) error {
+	if len(traces) != len(block.Transactions()) {
+		return fmt.Errorf("incomplete block traces: received %d for %d transactions", len(traces), len(block.Transactions()))
+	}
+	for i, tx := range block.Transactions() {
+		if traces[i].TxHash != tx.Hash() || traces[i].Result == nil || traces[i].Error != "" {
+			return fmt.Errorf("invalid trace for transaction %d (%s)", i, tx.Hash())
+		}
+		if tx.To() != nil && (traces[i].Result.To != *tx.To() || !bytes.Equal(traces[i].Result.Input, tx.Data())) {
+			return fmt.Errorf("trace root does not match transaction %s", tx.Hash())
+		}
+	}
+	return nil
+}
+
+func claimTraceCalls(frame *neox.CallFrame, bridge common.Address) []claimTraceCall {
+	var result []claimTraceCall
+	var visit func(*neox.CallFrame, string)
+	visit = func(f *neox.CallFrame, path string) {
+		if f == nil || f.Error != "" {
+			return
+		}
+		if path != "top-level" && f.To == bridge && f.Type == "CALL" && len(f.Input) == 68 && string(f.Input[:4]) == string(claimTokenSelector) {
+			result = append(result, claimTraceCall{Input: append([]byte(nil), f.Input...), Position: path})
+		}
+		for i := range f.Calls {
+			visit(&f.Calls[i], fmt.Sprintf("%s/%d", path, i))
+		}
+	}
+	visit(frame, "top-level")
+	return result
+}
+
+func decodeTokenClaimCall(tx *ethtypes.Transaction, receipt *ethtypes.Receipt, bridge common.Address, implementation common.Address, blockTime time.Time, pair *datastore.OperationIdentity, claimable *datastore.LifecycleEvidence, input []byte, position string) (*datastore.LifecycleObservation, error) {
+	if len(input) != 68 || string(input[:4]) != string(claimTokenSelector) {
+		return nil, nil
+	}
 	if receipt == nil || receipt.Status != ethtypes.ReceiptStatusSuccessful || receipt.TxHash != tx.Hash() {
 		return nil, nil
 	}
 	if implementation != common.HexToAddress("0x671bcb1b24e75a37adb283ffa509620c02eb35c6") {
 		return nil, fmt.Errorf("unverified claimToken implementation %s", implementation.Hex())
 	}
-	if new(big.Int).SetBytes(tx.Data()[4:16]).Sign() != 0 {
+	if new(big.Int).SetBytes(input[4:16]).Sign() != 0 {
 		return nil, fmt.Errorf("invalid address argument")
 	}
-	token := common.BytesToAddress(tx.Data()[16:36])
-	nonceBig := new(big.Int).SetBytes(tx.Data()[36:68])
+	token := common.BytesToAddress(input[16:36])
+	nonceBig := new(big.Int).SetBytes(input[36:68])
 	if !nonceBig.IsUint64() {
 		return nil, fmt.Errorf("claim nonce overflows uint64")
 	}
@@ -307,7 +356,7 @@ func decodeDirectTokenClaim(tx *ethtypes.Transaction, receipt *ethtypes.Receipt,
 		}
 	}
 	raw, _ := json.Marshal(payload)
-	evidence := datastore.LifecycleEvidence{Kind: "call", Chain: "neo_x", Contract: bridge.Hex(), Implementation: implementation.Hex(), BlockHeight: receipt.BlockNumber.Uint64(), BlockHash: receipt.BlockHash.Hex(), TxHash: tx.Hash().Hex(), ObservedAt: blockTime, Position: "top-level", Payload: raw}
+	evidence := datastore.LifecycleEvidence{Kind: "call", Chain: "neo_x", Contract: bridge.Hex(), Implementation: implementation.Hex(), BlockHeight: receipt.BlockNumber.Uint64(), BlockHash: receipt.BlockHash.Hex(), TxHash: tx.Hash().Hex(), ObservedAt: blockTime, Position: position, Payload: raw}
 	o := lifecycleObs(*pair, datastore.FactClaim, evidence, "")
 	return &o, nil
 }

@@ -24,18 +24,24 @@ receipt success, call traces, supported implementations, and decoded provenance.
 A target-complete manifest alone does not certify live coverage after cutover or
 enable any negative conclusion.
 
-The Neo X live indexer now writes decoded destination events, Neo X message
-source types and verified direct silent token claims with its normal checkpoint.
-It verifies receipts and retains unknown where an earlier claimable cannot be
-identified. Only the verified historical silent-claim implementation is enabled
-for direct call evidence; other implementations stop processing a correlated
-claim pending verification. Indirect claims and historical `Execution(uint256,uint8)`
-deployments still require implementation-specific trace/ABI handling. These
-limitations mean the live checkpoint does **not** certify complete claim or
-historical execution coverage. The API, Swagger, frontend, legacy monitor and
-webhook logic remain unchanged. N3 decoding, trace coverage, bounded historical
-recovery, and verified cutover remain prerequisites to the public projection
-and relay-stuck precedence.
+The Neo X live indexer writes decoded destination events, Neo X message
+source types and verified direct and indirect silent token claims with its
+normal checkpoint. It verifies receipts and complete `debug_traceBlockByNumber`
+call trees; a missing trace prevents checkpoint advancement. Each successful
+indirect claim requires successful ancestors and a successful outer receipt.
+The configured Neo X RPC endpoints must support historical `callTracer` block
+traces. Only the verified historical silent-claim implementation is enabled;
+another implementation stops processing a correlated claim until verified.
+Claims without an observed earlier claimable retain unknown outcome and require
+historical recovery. The sole checked-in message bridge release artifact (v1.0.0)
+declares `Execution(uint256,(bool,bytes))`. No verified deployed ABI for the
+old indexer signature `Execution(uint256,uint8)` has been identified, so an
+observed event with that signature stops the checkpoint instead of interpreting
+it as the tuple. These limits mean the live checkpoint does **not** certify
+complete historical coverage. The API, Swagger, frontend, legacy monitor and
+webhook logic remain unchanged. N3 decoding, bounded historical recovery and
+verified cutover remain prerequisites to the public projection and relay-stuck
+precedence.
 
 This document records the lifecycle contract adopted for backend issues [#28](https://github.com/bane-labs/bridge-indexer-backend/issues/28) and [#29](https://github.com/bane-labs/bridge-indexer-backend/issues/29), and frontend issues [#9](https://github.com/bane-labs/bridge-indexer-frontend/issues/9) and [#17](https://github.com/bane-labs/bridge-indexer-frontend/issues/17). It specifies the implementation to follow. The current operation API still exposes the legacy completion model.
 
