@@ -24,21 +24,28 @@ type RecoveryTarget struct {
 // committed; it starts at StartHeight. No migration creates this record on an
 // existing database: a missing manifest means coverage is unknown.
 type RecoveryManifest struct {
-	Chain                string           `json:"chain"`
-	WatchedContracts     []string         `json:"watched_contracts"`
-	ImplementationRanges []string         `json:"implementation_ranges"`
-	RequiredPaths        []string         `json:"required_paths"` // see baseRecoveryPaths
-	StartHeight          uint64           `json:"start_height"`
-	TargetHeight         uint64           `json:"target_height"`
-	TargetHash           string           `json:"target_hash"`
-	Targets              []RecoveryTarget `json:"targets,omitempty"`
-	NextHeight           uint64           `json:"next_height"`
-	ContiguousHash       string           `json:"contiguous_hash,omitempty"`
-	LastBatchFrom        uint64           `json:"last_batch_from,omitempty"`
-	LastBatchDigest      string           `json:"last_batch_digest,omitempty"`
-	Batches              uint64           `json:"batches"`
-	Observations         uint64           `json:"observations"`
-	RecoveredOperations  uint64           `json:"recovered_operations"`
+	Chain                string   `json:"chain"`
+	WatchedContracts     []string `json:"watched_contracts"`
+	ImplementationRanges []string `json:"implementation_ranges"`
+	RequiredPaths        []string `json:"required_paths"` // see baseRecoveryPaths
+	// TrustedIndex, when set, lets ranges inside an index's live window be
+	// located through it: only the blocks it lists are fetched and decoded,
+	// and the rest of the range is covered on the index's word. Fixed at begin.
+	TrustedIndex        string           `json:"trusted_index,omitempty"`
+	StartHeight         uint64           `json:"start_height"`
+	TargetHeight        uint64           `json:"target_height"`
+	TargetHash          string           `json:"target_hash"`
+	Targets             []RecoveryTarget `json:"targets,omitempty"`
+	NextHeight          uint64           `json:"next_height"`
+	ContiguousHash      string           `json:"contiguous_hash,omitempty"`
+	LastBatchFrom       uint64           `json:"last_batch_from,omitempty"`
+	LastBatchDigest     string           `json:"last_batch_digest,omitempty"`
+	Batches             uint64           `json:"batches"`
+	Observations        uint64           `json:"observations"`
+	RecoveredOperations uint64           `json:"recovered_operations"`
+	// LocatedBlocks counts committed blocks covered through TrustedIndex
+	// rather than fetched individually.
+	LocatedBlocks uint64 `json:"located_blocks,omitempty"`
 }
 
 // baseRecoveryPaths are the evidence paths every committed range must have
@@ -145,7 +152,7 @@ func (os *OperationStore) BeginRecovery(m RecoveryManifest) error {
 }
 
 func sameRecoveryBounds(a, b RecoveryManifest) bool {
-	return a.Chain == b.Chain && a.StartHeight == b.StartHeight && a.TargetHeight == b.TargetHeight && a.TargetHash == b.TargetHash && slices.Equal(a.WatchedContracts, b.WatchedContracts) && slices.Equal(a.ImplementationRanges, b.ImplementationRanges) && slices.Equal(a.RequiredPaths, b.RequiredPaths)
+	return a.Chain == b.Chain && a.TrustedIndex == b.TrustedIndex && a.StartHeight == b.StartHeight && a.TargetHeight == b.TargetHeight && a.TargetHash == b.TargetHash && slices.Equal(a.WatchedContracts, b.WatchedContracts) && slices.Equal(a.ImplementationRanges, b.ImplementationRanges) && slices.Equal(a.RequiredPaths, b.RequiredPaths)
 }
 
 // ExtendRecoveryTarget raises the inclusive target, keeping all committed
@@ -189,9 +196,12 @@ type RecoveryStatus struct {
 	// unresolved evidence. Only then can absence of an outcome in that
 	// interval be read as not executed.
 	Complete bool `json:"complete"`
-	// HandoffReady: Complete, and the live checkpoint is at or below the
-	// target, so the normal indexer resumes inside the verified interval and
-	// no block is left uncovered between recovery and live indexing.
+	// IndexTrusted: Complete rests partly on the manifest's TrustedIndex,
+	// because some blocks were located through it rather than fetched.
+	IndexTrusted bool `json:"index_trusted"`
+	// HandoffReady: Complete, and the live checkpoint equals the target, so
+	// the normal indexer resumes at the first block after the verified
+	// interval: nothing is uncovered and nothing is processed twice.
 	HandoffReady bool     `json:"handoff_ready"`
 	Blocking     []string `json:"blocking,omitempty"`
 }
@@ -235,20 +245,24 @@ func (os *OperationStore) RecoveryStatus(chain string) (*RecoveryStatus, error) 
 		}
 	}
 	st.Complete = st.Contiguous && st.ClaimTraceGapBlocks == 0 && st.UnresolvedClaims == 0
+	st.IndexTrusted = m.LocatedBlocks > 0
 	live, err := os.store.GetIndexerState(chain)
 	switch {
 	case err == nil:
 		h := live.LastBlockHeight
 		st.LiveCheckpoint = &h
-		if h > m.TargetHeight {
-			st.Blocking = append(st.Blocking, fmt.Sprintf("live checkpoint %d is beyond target %d; extend the target to at least %d", h, m.TargetHeight, h))
+		switch {
+		case h > m.TargetHeight:
+			st.Blocking = append(st.Blocking, fmt.Sprintf("live checkpoint %d is beyond target %d; extend the target to the checkpoint", h, m.TargetHeight))
+		case h < m.TargetHeight:
+			st.Blocking = append(st.Blocking, fmt.Sprintf("live checkpoint %d is below target %d; let live indexing pass the target, then extend the target to the checkpoint", h, m.TargetHeight))
 		}
 	case errors.Is(err, ErrNotFound):
 		st.Blocking = append(st.Blocking, "no live checkpoint to hand off to")
 	default:
 		return nil, err
 	}
-	st.HandoffReady = st.Complete && st.LiveCheckpoint != nil && *st.LiveCheckpoint <= m.TargetHeight
+	st.HandoffReady = st.Complete && st.LiveCheckpoint != nil && *st.LiveCheckpoint == m.TargetHeight
 	return st, nil
 }
 

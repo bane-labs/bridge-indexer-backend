@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
 	badger "github.com/dgraph-io/badger/v4"
@@ -22,6 +23,10 @@ type RecoveryRange struct {
 	FromParentHash string
 	ToHash         string
 	VerifiedPaths  []string
+	// LocatedBy names the index that selected the blocks fetched in this
+	// range; it must be the manifest's TrustedIndex. Empty: every block was
+	// fetched and decoded.
+	LocatedBy string
 }
 
 // RecoveryBatch is what the live decoders produced for a RecoveryRange.
@@ -33,13 +38,26 @@ type RecoveryBatch struct {
 	// TraceGaps (Neo X) are the range's blocks whose call traces were missing.
 	TraceGaps []NeoXClaimTraceGap
 	// UnresolvedClaims (N3) are claims in the range without a verified pair.
+	// They replace any earlier unresolved records inside the range.
 	UnresolvedClaims []UnresolvedN3TokenClaim
+	// LegacyCompletions are legacy completions the live event processors
+	// apply that no lifecycle fact expresses one-to-one: a Neo X
+	// NeoToEvmRootUpdate completes only its own nonce, not every stored
+	// message of the batch. Identity, height, transaction and time are used.
+	LegacyCompletions []LifecycleObservation
+	// StaleBefore holds, per bridge type, the cutoff before which a
+	// recovered operation without destination evidence is stored as legacy
+	// stuck (the live stuck threshold). Not part of the retry digest.
+	StaleBefore map[types.BridgeType]time.Time `json:"-"`
 }
 
 // RecoveryCommitResult reports what one committed range changed.
 type RecoveryCommitResult struct {
 	InsertedOperations int
 	LegacyCompleted    int
+	// WithoutDestination counts recovered operations with no destination
+	// evidence yet, stored with legacy status stuck (see below).
+	WithoutDestination int
 	Retry              bool
 }
 
@@ -100,6 +118,9 @@ func (os *OperationStore) CommitRecoveryRange(r RecoveryRange, b RecoveryBatch) 
 				return fmt.Errorf("unverified evidence path %q", required)
 			}
 		}
+		if r.LocatedBy != "" && r.LocatedBy != m.TrustedIndex {
+			return fmt.Errorf("range located by %q, but the manifest trusts %q", r.LocatedBy, m.TrustedIndex)
+		}
 		if slices.Contains(m.RequiredPaths, "traces") && len(b.TraceGaps) > 0 {
 			return errors.New("manifest requires traces but the range has claim trace gaps")
 		}
@@ -130,6 +151,15 @@ func (os *OperationStore) CommitRecoveryRange(r RecoveryRange, b RecoveryBatch) 
 				}
 			}
 		}
+		for _, o := range b.LegacyCompletions {
+			done, err := legacyCompleteFrom(txn, o)
+			if err != nil {
+				return err
+			}
+			if done {
+				result.LegacyCompleted++
+			}
+		}
 		for _, op := range inserted {
 			done, err := completeInsertedFromLifecycle(txn, op)
 			if err != nil {
@@ -137,6 +167,10 @@ func (os *OperationStore) CommitRecoveryRange(r RecoveryRange, b RecoveryBatch) 
 			}
 			if done {
 				result.LegacyCompleted++
+			} else if marked, err := markRecoveredWithoutDestination(txn, op, b.StaleBefore); err != nil {
+				return err
+			} else if marked {
+				result.WithoutDestination++
 			}
 			if err := raiseSourceState(txn, op); err != nil {
 				return err
@@ -154,8 +188,10 @@ func (os *OperationStore) CommitRecoveryRange(r RecoveryRange, b RecoveryBatch) 
 				}
 			}
 		}
-		if err := writeUnresolvedN3TokenClaims(txn, b.UnresolvedClaims); err != nil {
-			return err
+		if r.Chain == "neo_n3" {
+			if err := replaceUnresolvedN3TokenClaims(txn, r.From, r.To, b.UnresolvedClaims); err != nil {
+				return err
+			}
 		}
 		if r.Chain == "neo_x" {
 			if err := replaceNeoXClaimTraceGaps(txn, r.From, r.To, b.TraceGaps); err != nil {
@@ -169,6 +205,9 @@ func (os *OperationStore) CommitRecoveryRange(r RecoveryRange, b RecoveryBatch) 
 		m.Batches++
 		m.Observations += uint64(len(b.Observations))
 		m.RecoveredOperations += uint64(len(inserted))
+		if r.LocatedBy != "" {
+			m.LocatedBlocks += r.To - r.From + 1
+		}
 		result.InsertedOperations = len(inserted)
 		return n3Set(txn, recoveryPrefix+r.Chain, m)
 	})
@@ -211,21 +250,26 @@ func validateRecoveryBatch(r RecoveryRange, b RecoveryBatch) error {
 			return errors.New("unresolved claim outside recovery range")
 		}
 	}
+	for _, o := range b.LegacyCompletions {
+		if o.Evidence.Chain != r.Chain || !inRange(o.Evidence.BlockHeight) || o.Evidence.TxHash == "" {
+			return errors.New("legacy completion outside recovery range")
+		}
+	}
 	return nil
 }
 
-// completesLegacy mirrors the events that complete a legacy operation in live
-// indexing: Neo X deposit, claimable and claim events and message root
-// updates/storage (deposits); N3 distribution, claim and execution
-// (withdrawals). Lifecycle settlement is reported separately and does not
-// complete an asset operation.
+// completesLegacy mirrors the facts whose events complete a legacy operation
+// in live indexing: N3 distribution, claim and execution (withdrawals); Neo X
+// deposit, claimable and claim events (native and token deposits). Message
+// deposits complete on a root update's own nonce only, which is passed as
+// RecoveryBatch.LegacyCompletions. Settlement alone never completes.
 func completesLegacy(o LifecycleObservation) bool {
 	switch o.Identity.Direction {
 	case types.DirectionWithdrawal:
 		return o.Fact == FactDistribution || o.Fact == FactClaim || o.Fact == FactExecution
 	case types.DirectionDeposit:
 		if o.Identity.BridgeType == types.BridgeTypeMessage {
-			return o.Fact == FactSettlement
+			return false
 		}
 		return o.Fact == FactDistribution || o.Fact == FactClaimable || o.Fact == FactClaim
 	}
@@ -331,9 +375,61 @@ func completeInsertedFromLifecycle(txn *badger.Txn, op *types.BridgeOperation) (
 		}
 	}
 	if best == nil {
-		return false, nil
+		return completeInsertedFromDeferred(txn, op, id)
 	}
 	return legacyCompleteFrom(txn, *best)
+}
+
+// completeInsertedFromDeferred applies a legacy deferred completion recorded
+// before the source operation existed, exactly as live reconciliation would,
+// and removes it.
+func completeInsertedFromDeferred(txn *badger.Txn, op *types.BridgeOperation, id OperationIdentity) (bool, error) {
+	keys := []string{deferredCompletionKey(op.BridgeType, op.Direction, op.Nonce, op.TokenContract, op.DestTokenContract)}
+	if op.BridgeType == types.BridgeTypeToken {
+		keys = append(keys, deferredCompletionKey(op.BridgeType, op.Direction, op.Nonce, nil, op.DestTokenContract),
+			deferredCompletionKey(op.BridgeType, op.Direction, op.Nonce, nil, nil))
+	}
+	for _, key := range keys {
+		var d deferredCompletion
+		if err := n3Read(txn, key, &d); errors.Is(err, ErrNotFound) {
+			continue
+		} else if err != nil {
+			return false, err
+		}
+		if err := txn.Delete([]byte(key)); err != nil {
+			return false, err
+		}
+		return legacyCompleteFrom(txn, LifecycleObservation{Identity: id, Evidence: LifecycleEvidence{BlockHeight: d.DestBlock, TxHash: d.DestTxHash, ObservedAt: d.CompletionTime}})
+	}
+	return false, nil
+}
+
+// markRecoveredWithoutDestination stores a recovered, still pending
+// operation older than the live stuck threshold as legacy stuck. The stuck
+// detector would otherwise move it from pending to stuck on its next pass and
+// send one stale alert per historical operation; the stored legacy state is
+// the same. Younger operations stay pending for the detector. The lifecycle
+// stays unknown, and destination evidence found later still completes the
+// operation. Neo X to N3 message withdrawals stay pending, as in live
+// indexing, where they are never considered stuck.
+func markRecoveredWithoutDestination(txn *badger.Txn, op *types.BridgeOperation, staleBefore map[types.BridgeType]time.Time) (bool, error) {
+	key := operationKeyForOp(op)
+	var current types.BridgeOperation
+	if err := n3Read(txn, key, &current); err != nil {
+		return false, err
+	}
+	cutoff, ok := staleBefore[current.BridgeType]
+	if current.Status != types.StatusPending || current.BridgeType == types.BridgeTypeMessage && current.Direction == types.DirectionWithdrawal || !ok || !current.Timestamp.Before(cutoff) {
+		return false, nil
+	}
+	if err := txn.Delete([]byte(statusIndexKeyForOp(types.StatusPending, &current))); err != nil {
+		return false, err
+	}
+	current.Status = types.StatusStuck
+	if err := n3Set(txn, key, &current); err != nil {
+		return false, err
+	}
+	return true, n3Set(txn, statusIndexKeyForOp(types.StatusStuck, &current), []byte{})
 }
 
 func ensureBridgeMetadata(txn *badger.Txn, meta types.DirectionalBridgeState) error {
@@ -440,6 +536,33 @@ func receivedInstance(id OperationIdentity) string {
 	}
 	s, d := id.SourceToken, id.DestinationToken
 	return BuildInstanceID(string(id.BridgeType), src, dst, &s, &d)
+}
+
+// replaceUnresolvedN3TokenClaims makes [from, to] carry exactly the given
+// unresolved claims. A replay re-derives every claim in the range, so an
+// earlier record (for example with a reason that changed as more claimables
+// became known) is superseded rather than conflicting.
+func replaceUnresolvedN3TokenClaims(txn *badger.Txn, from, to uint64, claims []UnresolvedN3TokenClaim) error {
+	var stale [][]byte
+	it := txn.NewIterator(badger.DefaultIteratorOptions)
+	prefix := []byte(unresolvedN3TokenClaimPrefix)
+	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+		var c UnresolvedN3TokenClaim
+		if err := it.Item().Value(func(v []byte) error { return json.Unmarshal(v, &c) }); err != nil {
+			it.Close()
+			return err
+		}
+		if c.Evidence.BlockHeight >= from && c.Evidence.BlockHeight <= to {
+			stale = append(stale, it.Item().KeyCopy(nil))
+		}
+	}
+	it.Close()
+	for _, key := range stale {
+		if err := txn.Delete(key); err != nil {
+			return err
+		}
+	}
+	return writeUnresolvedN3TokenClaims(txn, claims)
 }
 
 // replaceNeoXClaimTraceGaps makes [from, to] carry exactly the given gaps:

@@ -388,23 +388,52 @@ func TestRecoveryInsertsMissingSourceHistory(t *testing.T) {
 	src.Root = &root
 	pending := tokenDeposit(28, "57d1", "e816", types.StatusPending)
 	pending.SourceBlockHeight = 1017
-	res := mustCommit(t, os, recoveryRange("neo_n3", 1000, 1099), RecoveryBatch{Operations: []*types.BridgeOperation{src, pending}})
-	if res.InsertedOperations != 2 || res.LegacyCompleted != 1 {
+	young := tokenDeposit(29, "57d1", "e816", types.StatusPending)
+	young.SourceBlockHeight, young.Timestamp = 1018, time.Now()
+	stale := map[types.BridgeType]time.Time{types.BridgeTypeToken: time.Now().Add(-time.Hour)}
+	res := mustCommit(t, os, recoveryRange("neo_n3", 1000, 1099), RecoveryBatch{Operations: []*types.BridgeOperation{src, pending, young}, StaleBefore: stale})
+	if res.InsertedOperations != 3 || res.LegacyCompleted != 1 {
 		t.Fatalf("result %+v", res)
 	}
 	got, _ := s.getRaw(operationKeyForOp(src))
 	if got.Status != types.StatusCompleted || *got.DestTxHash != "dest" || *got.DestBlockHeight != 7646446 {
 		t.Fatalf("recovered source not completed from destination evidence: %+v", got)
 	}
-	if got, _ := s.getRaw(operationKeyForOp(pending)); got.Status != types.StatusPending || got.DestTxHash != nil {
-		t.Fatalf("operation without destination evidence completed: %+v", got)
+	// No destination evidence yet: legacy stuck without a stale alert, and
+	// no lifecycle fact is invented.
+	if got, _ := s.getRaw(operationKeyForOp(pending)); got.Status != types.StatusStuck || got.DestTxHash != nil || res.WithoutDestination != 1 {
+		t.Fatalf("operation without destination evidence: %+v %+v", got, res)
 	}
-	completed := types.StatusCompleted
-	if n, _ := os.CountOperations(OperationFilter{Status: &completed}); n != 1 {
-		t.Fatalf("status index: %d completed", n)
+	if _, err := os.GetLifecycle(tokenID(types.DirectionDeposit, 28, "57d1", "e816")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("lifecycle invented: %v", err)
+	}
+	// A recent operation stays pending for the live stuck detector to judge.
+	if got, _ := s.getRaw(operationKeyForOp(young)); got.Status != types.StatusPending {
+		t.Fatalf("young recovered operation marked stuck: %+v", got)
+	}
+	completed, stuck, pendingStatus := types.StatusCompleted, types.StatusStuck, types.StatusPending
+	for status, want := range map[*types.OperationStatus]int{&completed: 1, &stuck: 1, &pendingStatus: 1} {
+		if n, _ := os.CountOperations(OperationFilter{Status: status}); n != want {
+			t.Fatalf("status index %s: %d, want %d", *status, n, want)
+		}
+	}
+	// Destination evidence recovered later completes it.
+	if err := os.BeginRecovery(recoveryManifest("neo_x", 500, 599)); err != nil {
+		t.Fatal(err)
+	}
+	later := tokenID(types.DirectionDeposit, 28, "0x57d1", "0xe816")
+	res = mustCommit(t, os, recoveryRange("neo_x", 500, 599), RecoveryBatch{Observations: []LifecycleObservation{
+		{later, FactSettlement, rootEvidence("neo_x", "dest-28", 550, "r28"), ""},
+		{later, FactDistribution, lifecycleEvidence("neo_x", "dest-28", 550), ""},
+	}})
+	if got, _ := s.getRaw(operationKeyForOp(pending)); got.Status != types.StatusCompleted || *got.DestTxHash != "dest-28" || res.LegacyCompleted != 1 {
+		t.Fatalf("stuck recovered operation not completed by later evidence: %+v %+v", got, res)
+	}
+	if n, _ := os.CountOperations(OperationFilter{Status: &stuck}); n != 0 {
+		t.Fatalf("stale stuck index: %d", n)
 	}
 	var srcState types.ChainState
-	if err := s.Get(bridgeSrcPrefix+InstanceIDFromOperation(src), &srcState); err != nil || srcState.Nonce != 28 {
+	if err := s.Get(bridgeSrcPrefix+InstanceIDFromOperation(src), &srcState); err != nil || srcState.Nonce != 29 {
 		t.Fatalf("source state: %+v %v", srcState, err)
 	}
 }
@@ -444,11 +473,18 @@ func TestRecoveryCutoverCatchUp(t *testing.T) {
 	if err := os.BeginRecovery(recoveryManifest("neo_x", 100, 149)); err != nil {
 		t.Fatal(err)
 	}
+	// Live behind the target would re-process recovered blocks: not ready.
 	if err := s.SaveIndexerState(&types.IndexerState{Chain: "neo_x", LastBlockHeight: 140}); err != nil {
 		t.Fatal(err)
 	}
 	mustCommit(t, os, recoveryRange("neo_x", 100, 149), RecoveryBatch{})
-	if st, _ := os.RecoveryStatus("neo_x"); !st.Complete || !st.HandoffReady {
+	if st, _ := os.RecoveryStatus("neo_x"); !st.Complete || st.HandoffReady {
+		t.Fatalf("handoff allowed with live checkpoint below the target: %+v", st)
+	}
+	if err := s.SaveIndexerState(&types.IndexerState{Chain: "neo_x", LastBlockHeight: 149}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := os.RecoveryStatus("neo_x"); !st.HandoffReady {
 		t.Fatalf("copy rehearsal: %+v", st)
 	}
 	// Production kept indexing after the copy.
@@ -462,19 +498,19 @@ func TestRecoveryCutoverCatchUp(t *testing.T) {
 	if err := os.ExtendRecoveryTarget("neo_x", 140, "block-140"); err == nil {
 		t.Fatal("target lowered")
 	}
-	if err := os.ExtendRecoveryTarget("neo_x", 180, "block-180"); err != nil {
+	if err := os.ExtendRecoveryTarget("neo_x", 175, "block-175"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.ExtendRecoveryTarget("neo_x", 180, "block-180"); err != nil {
+	if err := os.ExtendRecoveryTarget("neo_x", 175, "block-175"); err != nil {
 		t.Fatalf("idempotent extend: %v", err)
 	}
-	if err := os.ExtendRecoveryTarget("neo_x", 180, "other"); err == nil {
+	if err := os.ExtendRecoveryTarget("neo_x", 175, "other"); err == nil {
 		t.Fatal("target re-hashed")
 	}
 	if st, _ := os.RecoveryStatus("neo_x"); st.Complete || st.HandoffReady {
 		t.Fatalf("extension not replayed yet but complete: %+v", st)
 	}
-	mustCommit(t, os, recoveryRange("neo_x", 150, 180), RecoveryBatch{})
+	mustCommit(t, os, recoveryRange("neo_x", 150, 175), RecoveryBatch{})
 	st, _ = os.RecoveryStatus("neo_x")
 	m := st.Manifest
 	if !st.HandoffReady || m.StartHeight != 100 || len(m.Targets) != 2 || m.Targets[0].Height != 149 {
@@ -491,4 +527,102 @@ func (s *Store) getRaw(key string) (*types.BridgeOperation, error) {
 		return nil, err
 	}
 	return &op, nil
+}
+
+// Message deposits complete in the legacy projection exactly as live: on the
+// root update's own nonce, not on every stored message of the batch; a
+// recovered source operation takes up a deferred completion.
+func TestRecoveryMessageDepositLegacyMatchesLive(t *testing.T) {
+	s := newTestStore(t)
+	os := NewOperationStore(s, nil)
+	if err := os.BeginRecovery(recoveryManifest("neo_x", 100, 199)); err != nil {
+		t.Fatal(err)
+	}
+	msg := func(n uint64) OperationIdentity {
+		return OperationIdentity{BridgeType: types.BridgeTypeMessage, Direction: types.DirectionDeposit, Nonce: n}
+	}
+	lower := &types.BridgeOperation{BridgeType: types.BridgeTypeMessage, Direction: types.DirectionDeposit, Nonce: 3, SourceChain: "neo_n3", DestinationChain: "neo_x", Status: types.StatusPending}
+	if err := os.SaveOperation(lower); err != nil {
+		t.Fatal(err)
+	}
+	stored := lifecycleEvidence("neo_x", "relay", 120)
+	stored.Payload = json.RawMessage(`{"metadata":"0x00"}`)
+	root := lifecycleEvidence("neo_x", "relay", 120)
+	res := mustCommit(t, os, recoveryRange("neo_x", 100, 199), RecoveryBatch{
+		Observations:      []LifecycleObservation{{msg(3), FactSettlement, stored, ""}, {msg(4), FactSettlement, stored, ""}},
+		LegacyCompletions: []LifecycleObservation{{Identity: msg(4), Evidence: root}},
+	})
+	if got, _ := os.GetOperation(types.BridgeTypeMessage, types.DirectionDeposit, 3); got.Status != types.StatusPending || res.LegacyCompleted != 0 {
+		t.Fatalf("Store settlement completed a lower nonce: %+v %+v", got, res)
+	}
+	// Nonce 4's source is recovered later from N3 and takes the deferred completion.
+	if err := os.BeginRecovery(recoveryManifest("neo_n3", 1000, 1099)); err != nil {
+		t.Fatal(err)
+	}
+	src := &types.BridgeOperation{BridgeType: types.BridgeTypeMessage, Direction: types.DirectionDeposit, Nonce: 4, SourceChain: "neo_n3", DestinationChain: "neo_x", SourceBlockHeight: 1010, Status: types.StatusPending}
+	res = mustCommit(t, os, recoveryRange("neo_n3", 1000, 1099), RecoveryBatch{Operations: []*types.BridgeOperation{src}})
+	got, _ := os.GetOperation(types.BridgeTypeMessage, types.DirectionDeposit, 4)
+	if got.Status != types.StatusCompleted || *got.DestTxHash != "relay" || res.LegacyCompleted != 1 {
+		t.Fatalf("deferred root completion not applied: %+v %+v", got, res)
+	}
+	if ok, _ := s.HasKey(deferredCompletionKey(types.BridgeTypeMessage, types.DirectionDeposit, 4, nil, nil)); ok {
+		t.Fatal("deferred completion not consumed")
+	}
+}
+
+// A replay supersedes earlier unresolved records in its range instead of
+// conflicting with them when the reason changed.
+func TestRecoveryReplacesUnresolvedClaimsInRange(t *testing.T) {
+	s := newTestStore(t)
+	os := NewOperationStore(s, nil)
+	if err := os.BeginRecovery(recoveryManifest("neo_n3", 1000, 1099)); err != nil {
+		t.Fatal(err)
+	}
+	e := lifecycleEvidence("neo_n3", "claim-tx", 1050)
+	e.Kind, e.Position = "notification", "0:1"
+	outside := e
+	outside.BlockHeight, outside.TxHash = 2000, "later-claim"
+	live := &types.IndexerState{Chain: "neo_n3", LastBlockHeight: 2000, LastBlockHash: "block-2000"}
+	if err := s.SaveN3LifecycleCheckpoint(live, nil, nil, nil,
+		UnresolvedN3TokenClaim{Nonce: 3, DestinationToken: "bb", Evidence: e, Reason: "missing_claimable_pair"},
+		UnresolvedN3TokenClaim{Nonce: 4, DestinationToken: "bb", Evidence: outside, Reason: "missing_claimable_pair"}); err != nil {
+		t.Fatal(err)
+	}
+	mustCommit(t, os, recoveryRange("neo_n3", 1000, 1099), RecoveryBatch{UnresolvedClaims: []UnresolvedN3TokenClaim{
+		{Nonce: 3, DestinationToken: "bb", Evidence: e, Reason: "ambiguous_claimable_pair"},
+	}})
+	claims, _ := s.ListUnresolvedN3TokenClaims()
+	if len(claims) != 2 {
+		t.Fatalf("claims: %+v", claims)
+	}
+	for _, c := range claims {
+		if c.Nonce == 3 && c.Reason != "ambiguous_claimable_pair" || c.Nonce == 4 && c.Reason != "missing_claimable_pair" {
+			t.Fatalf("unresolved records: %+v", claims)
+		}
+	}
+}
+
+func TestRecoveryLocatedRangesNeedATrustedIndex(t *testing.T) {
+	os := NewOperationStore(newTestStore(t), nil)
+	if err := os.BeginRecovery(recoveryManifest("neo_n3", 1000, 1099)); err != nil {
+		t.Fatal(err)
+	}
+	r := recoveryRange("neo_n3", 1000, 1099)
+	r.LocatedBy = "some-index"
+	if _, err := os.CommitRecoveryRange(r, RecoveryBatch{}); err == nil {
+		t.Fatal("located range accepted without a trusted index")
+	}
+	trusted := recoveryManifest("neo_n3", 1000, 1099)
+	trusted.TrustedIndex = "some-index"
+	if err := os.BeginRecovery(trusted); err == nil {
+		t.Fatal("trust added to an existing manifest")
+	}
+	other := NewOperationStore(newTestStore(t), nil)
+	if err := other.BeginRecovery(trusted); err != nil {
+		t.Fatal(err)
+	}
+	mustCommit(t, other, r, RecoveryBatch{})
+	if m, _ := other.GetRecoveryManifest("neo_n3"); m.LocatedBlocks != 100 || !m.Contiguous() {
+		t.Fatalf("located coverage: %+v", m)
+	}
 }
