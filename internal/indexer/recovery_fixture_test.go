@@ -41,6 +41,7 @@ type recoveryCase struct {
 	Start       uint64 `json:"start"`
 	Target      uint64 `json:"target"`
 	EventFilter string `json:"event_filter,omitempty"` // fake plugin, see eventFilterFor
+	Reconcile   bool   `json:"reconcile,omitempty"`    // run Neo X claim reconciliation after the replay
 }
 
 type recoveryFixture struct {
@@ -190,8 +191,13 @@ func replayRecoveryCase(t *testing.T, f *recoveryFixture, name string, store *da
 	if err := r.Begin(ctx, c.Start, c.Target, c.EventFilter != ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(ctx, RecoveryRunOptions{Batch: 100}, nil); err != nil {
+	if err := r.Run(ctx, RecoveryRunOptions{Batch: 100000}, nil); err != nil {
 		t.Fatal(err)
+	}
+	if c.Reconcile {
+		if _, err := r.ReconcileClaims(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

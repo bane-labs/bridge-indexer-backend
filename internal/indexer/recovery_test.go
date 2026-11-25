@@ -71,7 +71,9 @@ func TestRecoveryNDMEMEDeposit27(t *testing.T) {
 	// The public Neo X node has no tracing, so indirect claim coverage of the
 	// block stays explicitly incomplete even though events were recovered.
 	st := mustStatus(t, opStore, "neo_x")
-	if !st.Contiguous || st.Complete || st.ClaimTraceGapBlocks != 1 || st.ClaimTraceGaps[0].Reason != "trace_unsupported" {
+	// Event-only recovery inspected no transaction for silent claims, so the
+	// block's claim coverage is explicitly deferred.
+	if !st.Contiguous || st.Complete || st.ClaimsDeferredBlocks != 1 || st.ClaimTraceGaps[0].Reason != datastore.GapClaimsDeferred {
 		t.Fatalf("Neo X status: %+v", st)
 	}
 
@@ -268,6 +270,7 @@ func TestRecoveryInterruptResumeAndTraceEnrichment(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := NewNeoXRecoverer(client, live.store, live.opStore, testTokenBridgeAddr, testMessageBridgeAddr, 1, live.idx.logger)
+	rec.ScanClaims(true)
 	if err := rec.Begin(ctx, 100, 103, false); err != nil {
 		t.Fatal(err)
 	}
@@ -290,6 +293,7 @@ func TestRecoveryInterruptResumeAndTraceEnrichment(t *testing.T) {
 	}
 	// A restarted process resumes from the watermark.
 	restarted := NewNeoXRecoverer(client, live.store, live.opStore, testTokenBridgeAddr, testMessageBridgeAddr, 1, live.idx.logger)
+	restarted.ScanClaims(true)
 	if err := restarted.Begin(ctx, 100, 103, false); err != nil {
 		t.Fatalf("begin on restart: %v", err)
 	}
@@ -311,6 +315,7 @@ func TestRecoveryInterruptResumeAndTraceEnrichment(t *testing.T) {
 	// The same interval replayed in one uninterrupted run gives the same result.
 	fresh := newOptionalTraceFixture(t, "ok")
 	once := NewNeoXRecoverer(fresh.idx.client, fresh.store, fresh.opStore, testTokenBridgeAddr, testMessageBridgeAddr, 4, fresh.idx.logger)
+	once.ScanClaims(true)
 	if err := once.Begin(ctx, 100, 103, false); err != nil {
 		t.Fatal(err)
 	}
