@@ -1,15 +1,59 @@
 package datastore
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
+	badger "github.com/dgraph-io/badger/v4"
 )
 
 // Key: "indexer_state:{chain}"
 
 func indexerStateKey(chain string) string {
 	return fmt.Sprintf("indexer_state:%s", chain)
+}
+
+// SaveNeoXLifecycleCheckpoint commits decoded evidence and the normal indexing
+// checkpoint together. A rejected observation cannot advance the checkpoint.
+func (s *Store) SaveNeoXLifecycleCheckpoint(state *types.IndexerState, ops []*types.BridgeOperation, extra []WriteOp, observations []LifecycleObservation) error {
+	if state.Chain != "neo_x" {
+		return fmt.Errorf("unexpected lifecycle checkpoint chain %q", state.Chain)
+	}
+	writeOps := []WriteOp{{Key: indexerStateKey(state.Chain), Value: state}}
+	for _, op := range ops {
+		normalized, err := s.reconcileDeferredCompletion(op, &writeOps)
+		if err != nil {
+			return err
+		}
+		if normalized.Status == types.StatusPending && s.operationAlreadyAdvanced(operationKeyForOp(normalized)) {
+			continue
+		}
+		writeOps = append(writeOps, WriteOp{Key: operationKeyForOp(normalized), Value: normalized},
+			WriteOp{Key: statusIndexKeyForOp(normalized.Status, normalized), Value: []byte{}})
+	}
+	writeOps = append(writeOps, extra...)
+	return retryLifecycleWrite(s.db, func(txn *badger.Txn) error {
+		if err := writeLifecycleObservations(txn, observations); err != nil {
+			return err
+		}
+		for _, op := range writeOps {
+			if op.Value == nil {
+				if err := txn.Delete([]byte(op.Key)); err != nil {
+					return err
+				}
+				continue
+			}
+			data, err := json.Marshal(op.Value)
+			if err != nil {
+				return err
+			}
+			if err := txn.Set([]byte(op.Key), data); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // SaveIndexerState persists the indexer checkpoint for a chain.

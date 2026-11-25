@@ -192,6 +192,33 @@ func (os *OperationStore) GetLifecycle(id OperationIdentity) (*OperationLifecycl
 	return &result, nil
 }
 
+// FindClaimableTokenPair only resolves a claim when one previously observed
+// claimable identifies both sides of its token pair. Historical gaps stay unknown.
+func (os *OperationStore) FindClaimableTokenPair(nonce uint64, destinationToken string) (*OperationIdentity, error) {
+	prefix := fmt.Sprintf("lifecycle:v1:token:deposit:%d:", nonce)
+	var found *OperationIdentity
+	err := os.store.ScanPrefix(prefix, func(key string, value []byte) error {
+		parts := strings.Split(strings.TrimPrefix(key, prefix), ":")
+		if len(parts) != 2 || parts[1] != normalizeTokenKeyPart(destinationToken) {
+			return nil
+		}
+		var l OperationLifecycle
+		if err := json.Unmarshal(value, &l); err != nil {
+			return err
+		}
+		if l.Claimable == nil {
+			return nil
+		}
+		if found != nil {
+			return errors.New("ambiguous token pair for claim")
+		}
+		found = &OperationIdentity{BridgeType: types.BridgeTypeToken, Direction: types.DirectionDeposit,
+			Nonce: nonce, SourceToken: parts[0], DestinationToken: parts[1]}
+		return nil
+	})
+	return found, err
+}
+
 // ApplyLifecycleObservations is atomic and serializes competing writers via
 // Badger's conflict detection. A destination observation can precede op:*.
 // Failed or reverted attempts must never be passed as positive observations.
