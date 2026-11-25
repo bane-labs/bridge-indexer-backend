@@ -198,19 +198,43 @@ func (idx *N3Indexer) applyProcessedBlock(state *types.IndexerState, ops []*type
 }
 
 func (idx *N3Indexer) applyProcessedBlockWithLifecycle(state *types.IndexerState, ops []*types.BridgeOperation, observations []datastore.LifecycleObservation) error {
+	resolved, unresolved, err := idx.resolveN3TokenClaims(observations)
+	if err != nil {
+		return err
+	}
+	extra, err := idx.buildBridgeStateWriteOps(ops)
+	if err != nil {
+		return err
+	}
+	if err := idx.store.SaveN3LifecycleCheckpoint(state, ops, extra, resolved, unresolved...); err != nil {
+		return fmt.Errorf("save N3 lifecycle checkpoint: %w", err)
+	}
+	for _, claim := range unresolved {
+		if idx.logger != nil {
+			idx.logger.Warn("N3 token claim awaits historical pair recovery", "nonce", claim.Nonce, "destination_token", claim.DestinationToken, "tx", claim.Evidence.TxHash, "reason", claim.Reason)
+		}
+	}
+	return nil
+}
+
+// resolveN3TokenClaims pairs each N3 TokenClaim with exactly one verified
+// claimable, from the same or an earlier block of observations or from the
+// store. Claims without a unique pair are returned as unresolved records.
+// Live indexing and historical recovery share this resolution.
+func (idx *N3Indexer) resolveN3TokenClaims(observations []datastore.LifecycleObservation) ([]datastore.LifecycleObservation, []datastore.UnresolvedN3TokenClaim, error) {
 	resolved := make([]datastore.LifecycleObservation, 0, len(observations))
 	var unresolved []datastore.UnresolvedN3TokenClaim
 	for i := range observations {
-		o := &observations[i]
+		o := observations[i]
 		if o.Fact != datastore.FactClaim || o.Identity.BridgeType != types.BridgeTypeToken {
-			resolved = append(resolved, *o)
+			resolved = append(resolved, o)
 			continue
 		}
 		var pair *datastore.OperationIdentity
 		ambiguous := false
 		for j := range observations {
 			candidate := &observations[j]
-			if candidate.Fact == datastore.FactClaimable && candidate.Identity.BridgeType == types.BridgeTypeToken && candidate.Identity.Nonce == o.Identity.Nonce && candidate.Identity.DestinationToken == o.Identity.DestinationToken {
+			if candidate.Fact == datastore.FactClaimable && candidate.Identity.BridgeType == types.BridgeTypeToken && candidate.Identity.Nonce == o.Identity.Nonce && candidate.Identity.DestinationToken == o.Identity.DestinationToken && candidate.Evidence.BlockHeight <= o.Evidence.BlockHeight {
 				if pair != nil {
 					ambiguous = true
 					break
@@ -223,7 +247,7 @@ func (idx *N3Indexer) applyProcessedBlockWithLifecycle(state *types.IndexerState
 			stored, err := idx.opStore.FindClaimableTokenPairForDirection(types.DirectionWithdrawal, o.Identity.Nonce, o.Identity.DestinationToken)
 			if err != nil {
 				if !errors.Is(err, datastore.ErrAmbiguousClaimPair) {
-					return err
+					return nil, nil, err
 				}
 				ambiguous = true
 			} else if pair != nil && stored != nil && *pair != *stored {
@@ -244,21 +268,9 @@ func (idx *N3Indexer) applyProcessedBlockWithLifecycle(state *types.IndexerState
 			continue
 		}
 		o.Identity = *pair
-		resolved = append(resolved, *o)
+		resolved = append(resolved, o)
 	}
-	extra, err := idx.buildBridgeStateWriteOps(ops)
-	if err != nil {
-		return err
-	}
-	if err := idx.store.SaveN3LifecycleCheckpoint(state, ops, extra, resolved, unresolved...); err != nil {
-		return fmt.Errorf("save N3 lifecycle checkpoint: %w", err)
-	}
-	for _, claim := range unresolved {
-		if idx.logger != nil {
-			idx.logger.Warn("N3 token claim awaits historical pair recovery", "nonce", claim.Nonce, "destination_token", claim.DestinationToken, "tx", claim.Evidence.TxHash, "reason", claim.Reason)
-		}
-	}
-	return nil
+	return resolved, unresolved, nil
 }
 
 func (idx *N3Indexer) processBlockBatchWithResult(ctx context.Context, from, to uint32, workers int) ([]n3BlockResult, error) {

@@ -24,6 +24,9 @@ var (
 	sigProxyUpgrade      = crypto.Keccak256Hash([]byte("Upgraded(address)"))
 	sigERC20Transfer     = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
 	claimTokenSelector   = crypto.Keccak256([]byte("claimToken(address,uint256)"))[:4]
+	// verifiedClaimImplementation is the only bridge implementation whose
+	// silent claimToken semantics are verified.
+	verifiedClaimImplementation = common.HexToAddress("0x671bcb1b24e75a37adb283ffa509620c02eb35c6")
 )
 
 func wordNonce(w common.Hash) (uint64, error) {
@@ -323,7 +326,7 @@ func decodeTokenClaimCall(tx *ethtypes.Transaction, receipt *ethtypes.Receipt, b
 	if receipt == nil || receipt.Status != ethtypes.ReceiptStatusSuccessful || receipt.TxHash != tx.Hash() {
 		return nil, nil
 	}
-	if implementation != common.HexToAddress("0x671bcb1b24e75a37adb283ffa509620c02eb35c6") {
+	if implementation != verifiedClaimImplementation {
 		return nil, fmt.Errorf("unverified claimToken implementation %s", implementation.Hex())
 	}
 	if new(big.Int).SetBytes(input[4:16]).Sign() != 0 {
