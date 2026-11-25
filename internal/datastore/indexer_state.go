@@ -16,7 +16,9 @@ func indexerStateKey(chain string) string {
 
 // SaveNeoXLifecycleCheckpoint commits decoded evidence and the normal indexing
 // checkpoint together. A rejected observation cannot advance the checkpoint.
-func (s *Store) SaveNeoXLifecycleCheckpoint(state *types.IndexerState, ops []*types.BridgeOperation, extra []WriteOp, observations []LifecycleObservation) error {
+// Claim trace gaps are committed with it, so advancing past a block without
+// traces never loses the fact that its indirect claim coverage is missing.
+func (s *Store) SaveNeoXLifecycleCheckpoint(state *types.IndexerState, ops []*types.BridgeOperation, extra []WriteOp, observations []LifecycleObservation, gaps ...NeoXClaimTraceGap) error {
 	if state.Chain != "neo_x" {
 		return fmt.Errorf("unexpected lifecycle checkpoint chain %q", state.Chain)
 	}
@@ -35,6 +37,9 @@ func (s *Store) SaveNeoXLifecycleCheckpoint(state *types.IndexerState, ops []*ty
 	writeOps = append(writeOps, extra...)
 	return retryLifecycleWrite(s.db, func(txn *badger.Txn) error {
 		if err := writeLifecycleObservations(txn, observations); err != nil {
+			return err
+		}
+		if err := writeNeoXClaimTraceGaps(txn, state.LastBlockHeight, gaps); err != nil {
 			return err
 		}
 		for _, op := range writeOps {
