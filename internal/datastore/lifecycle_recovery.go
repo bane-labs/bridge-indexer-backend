@@ -1,6 +1,7 @@
 package datastore
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ type RecoveryManifest struct {
 	TargetHash           string   `json:"target_hash"`
 	NextHeight           uint64   `json:"next_height"`
 	ContiguousHash       string   `json:"contiguous_hash,omitempty"`
+	LastBlockDigest      string   `json:"last_block_digest,omitempty"`
 	Unresolved           uint64   `json:"unresolved"`
 }
 
@@ -75,7 +77,7 @@ func (os *OperationStore) GetRecoveryManifest(chain string) (*RecoveryManifest, 
 // BeginRecovery is idempotent for the same manifest, but refuses to replace
 // existing bounds or reset an advanced watermark silently.
 func (os *OperationStore) BeginRecovery(m RecoveryManifest) error {
-	if m.NextHeight != m.StartHeight || m.ContiguousHash != "" || m.Unresolved != 0 {
+	if m.NextHeight != m.StartHeight || m.ContiguousHash != "" || m.LastBlockDigest != "" || m.Unresolved != 0 {
 		return errors.New("new recovery must start with an empty watermark")
 	}
 	if err := m.valid(); err != nil {
@@ -157,8 +159,17 @@ type RecoveryBlock struct {
 }
 
 // CommitRecoveryBlock atomically saves the block's observations and the
-// contiguous replay watermark. A missing or skipped block cannot advance it.
+// contiguous replay watermark. An exact retry of the most recently committed
+// block succeeds without advancing it; changed evidence or a skipped block fails.
 func (os *OperationStore) CommitRecoveryBlock(block RecoveryBlock, observations []LifecycleObservation) error {
+	input, err := json.Marshal(struct {
+		Block        RecoveryBlock
+		Observations []LifecycleObservation
+	}{block, observations})
+	if err != nil {
+		return err
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256(input))
 	return retryLifecycleWrite(os.store.db, func(txn *badger.Txn) error {
 		key := []byte(recoveryPrefix + block.Chain)
 		item, err := txn.Get(key)
@@ -174,6 +185,12 @@ func (os *OperationStore) CommitRecoveryBlock(block RecoveryBlock, observations 
 		}
 		if err := m.valid(); err != nil {
 			return err
+		}
+		if m.NextHeight > m.StartHeight && block.Height == m.NextHeight-1 {
+			if block.Hash == m.ContiguousHash && digest == m.LastBlockDigest && m.Unresolved == 0 {
+				return nil
+			}
+			return errors.New("conflicting retry of last recovery block")
 		}
 		if block.Height != m.NextHeight || block.Height > m.TargetHeight || block.Hash == "" {
 			return errors.New("noncontiguous or invalid recovery block")
@@ -202,6 +219,7 @@ func (os *OperationStore) CommitRecoveryBlock(block RecoveryBlock, observations 
 		}
 		m.NextHeight++
 		m.ContiguousHash = block.Hash
+		m.LastBlockDigest = digest
 		m.Unresolved = block.Unresolved
 		data, err := json.Marshal(m)
 		if err != nil {

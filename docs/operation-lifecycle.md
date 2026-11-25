@@ -17,10 +17,12 @@ watched contracts, implementation ranges, evidence paths, inclusive replay
 bounds, target hash, and contiguous watermark/hash. A block's observations and
 watermark can be committed together only in height and parent-hash order after
 the caller has verified all required evidence paths. This is a storage
-interface; the caller
-must actually verify block identity, receipt success, call traces, supported
-implementations, and decoded provenance. A target-complete manifest alone does
-not certify live coverage after cutover or enable any negative conclusion.
+interface. The manifest retains a digest of the last committed block and its
+observations so an exact retry succeeds without advancing the watermark;
+changed evidence is rejected. The caller must actually verify block identity,
+receipt success, call traces, supported implementations, and decoded provenance.
+A target-complete manifest alone does not certify live coverage after cutover or
+enable any negative conclusion.
 
 No indexer invokes these new writes yet. The API, Swagger, frontend, legacy
 monitor and webhook logic are unchanged. The next decoder/recovery work must
