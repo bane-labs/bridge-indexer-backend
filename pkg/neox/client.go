@@ -121,6 +121,14 @@ func (c *Client) BlockByNumber(ctx context.Context, number *big.Int) (*types.Blo
 	})
 }
 
+func (c *Client) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+	return retryEVM(c, ctx, func() (*types.Receipt, error) { return c.eth.TransactionReceipt(ctx, hash) })
+}
+
+func (c *Client) StorageAt(ctx context.Context, address common.Address, slot common.Hash, height *big.Int) ([]byte, error) {
+	return retryEVM(c, ctx, func() ([]byte, error) { return c.eth.StorageAt(ctx, address, slot, height) })
+}
+
 func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
 	if c.cacheReads && query.FromBlock != nil && query.ToBlock != nil {
 		from := query.FromBlock.Uint64()

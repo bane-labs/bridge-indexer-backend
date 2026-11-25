@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"reflect"
 	"sync"
 	"time"
 
@@ -22,8 +23,8 @@ const (
 	chainNeoX                     = "neo_x"
 	neoxPollInterval              = 3 * time.Second
 	neoxSafetyDepth        uint64 = 0
-	neoxMaxBlockRange      uint64 = 5000
-	neoxCheckpointInterval        = 50 // flush checkpoint every N no-op ranges
+	neoxMaxBlockRange      uint64 = 250 // claim detection fetches every block's transactions
+	neoxCheckpointInterval        = 50  // flush checkpoint every N no-op ranges
 )
 
 type NeoXIndexer struct {
@@ -157,29 +158,17 @@ func (idx *NeoXIndexer) runSerial(ctx context.Context, startHeight uint64) error
 
 // processBlockRange processes a single range (serial path). Writes to store directly.
 func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) error {
-	state, ops, err := idx.processBlockRangeWithResult(ctx, from, to)
+	state, ops, observations, err := idx.processBlockRangeWithResult(ctx, from, to)
 	if err != nil {
 		return err
 	}
 
-	if len(ops) > 0 {
-		extraOps, bsErr := idx.buildBridgeStateWriteOps(ops)
-		if bsErr != nil {
-			return fmt.Errorf("build bridge state write ops: %w", bsErr)
-		}
-		if len(extraOps) > 0 {
-			if err := idx.store.SaveIndexerStateWithOperationsAndExtra(state, ops, extraOps); err != nil {
-				return fmt.Errorf("save state with ops: %w", err)
-			}
-		} else {
-			if err := idx.store.SaveIndexerStateWithOperations(state, ops); err != nil {
-				return fmt.Errorf("save state with ops: %w", err)
-			}
-		}
-	} else {
-		if err := idx.store.SaveIndexerState(state); err != nil {
-			return fmt.Errorf("save state: %w", err)
-		}
+	extraOps, err := idx.buildBridgeStateWriteOps(ops)
+	if err != nil {
+		return fmt.Errorf("build bridge state write ops: %w", err)
+	}
+	if err := idx.store.SaveNeoXLifecycleCheckpoint(state, ops, extraOps, observations); err != nil {
+		return fmt.Errorf("save Neo X checkpoint: %w", err)
 	}
 
 	if to%10000 == 0 || to == from {
@@ -191,7 +180,7 @@ func (idx *NeoXIndexer) processBlockRange(ctx context.Context, from, to uint64) 
 
 // processBlockRangeWithResult does FilterLogs + event processing without writing to store.
 // This is the core work unit used by both serial and parallel paths.
-func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, to uint64) (*types.IndexerState, []*types.BridgeOperation, error) {
+func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, to uint64) (*types.IndexerState, []*types.BridgeOperation, []datastore.LifecycleObservation, error) {
 	query := ethereum.FilterQuery{
 		FromBlock: new(big.Int).SetUint64(from),
 		ToBlock:   new(big.Int).SetUint64(to),
@@ -200,7 +189,7 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 
 	logs, err := idx.client.FilterLogs(ctx, query)
 	if err != nil {
-		return nil, nil, fmt.Errorf("filter logs %d-%d: %w", from, to, err)
+		return nil, nil, nil, fmt.Errorf("filter logs %d-%d: %w", from, to, err)
 	}
 
 	// Collect unique block numbers that need headers (log blocks + to-block).
@@ -213,17 +202,141 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 
 	// Fetch all required headers concurrently.
 	headerCache := idx.prefetchHeaders(ctx, needHeaders)
+	for height := range needHeaders {
+		if headerCache[height] == nil {
+			return nil, nil, nil, fmt.Errorf("missing Neo X header %d", height)
+		}
+	}
+	// The block's transactions are required: a successful claimToken call has
+	// no bridge log in the pinned implementation.
+	var observations []datastore.LifecycleObservation
+	byTx := make(map[common.Hash][]ethtypes.Log)
+	for _, l := range logs {
+		if l.Removed {
+			return nil, nil, nil, fmt.Errorf("removed Neo X log at %d", l.BlockNumber)
+		}
+		if l.BlockHash != headerCache[l.BlockNumber].Hash() {
+			return nil, nil, nil, fmt.Errorf("log/header hash mismatch at %d", l.BlockNumber)
+		}
+		byTx[l.TxHash] = append(byTx[l.TxHash], l)
+	}
+	for txHash, txLogs := range byTx {
+		receipt, err := idx.client.TransactionReceipt(ctx, txHash)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("receipt %s: %w", txHash, err)
+		}
+		if receipt.BlockHash != txLogs[0].BlockHash || receipt.TxHash != txHash {
+			return nil, nil, nil, fmt.Errorf("receipt provenance mismatch %s", txHash)
+		}
+		if receipt.Status != ethtypes.ReceiptStatusSuccessful {
+			return nil, nil, nil, fmt.Errorf("bridge logs in failed transaction %s", txHash)
+		}
+		for _, l := range txLogs {
+			matched := false
+			for _, recorded := range receipt.Logs {
+				if recorded.Index == l.Index && recorded.Address == l.Address && reflect.DeepEqual(recorded.Topics, l.Topics) && reflect.DeepEqual(recorded.Data, l.Data) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil, nil, nil, fmt.Errorf("filtered log missing from receipt %s index %d", txHash, l.Index)
+			}
+		}
+		if idx.processor != nil {
+			decoded, err := decodeNeoXLifecycleTransaction(txLogs, idx.processor.tokenBridge, idx.processor.messageBridge, time.Unix(int64(headerCache[txLogs[0].BlockNumber].Time), 0))
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			observations = append(observations, decoded...)
+		}
+	}
+	if idx.processor != nil && idx.opStore != nil {
+		for height := from; height <= to; height++ {
+			block, err := idx.client.BlockByNumber(ctx, new(big.Int).SetUint64(height))
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("fetch claim block %d: %w", height, err)
+			}
+			if h := headerCache[height]; h != nil && h.Hash() != block.Hash() {
+				return nil, nil, nil, fmt.Errorf("claim block hash mismatch %d", height)
+			}
+			for _, tx := range block.Transactions() {
+				if tx.To() == nil || *tx.To() != idx.processor.tokenBridge || len(tx.Data()) != 68 || string(tx.Data()[:4]) != string(claimTokenSelector) {
+					continue
+				}
+				n, err := wordNonce(common.BytesToHash(tx.Data()[36:68]))
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				token := common.BytesToAddress(tx.Data()[16:36]).Hex()
+				pair, err := idx.opStore.FindClaimableTokenPair(n, token)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				if pair == nil {
+					for _, o := range observations {
+						if o.Fact == datastore.FactClaimable && o.Evidence.BlockHeight <= height && o.Identity.Nonce == n && common.HexToAddress(o.Identity.DestinationToken) == common.HexToAddress(token) {
+							id := o.Identity
+							pair = &id
+							break
+						}
+					}
+				}
+				if pair == nil {
+					continue
+				} // historical claims require recovery of the original claimable
+				var claimable *datastore.LifecycleEvidence
+				for _, o := range observations {
+					if o.Fact == datastore.FactClaimable && o.Identity == *pair && o.Evidence.BlockHeight <= height {
+						copy := o.Evidence
+						claimable = &copy
+						break
+					}
+				}
+				if claimable == nil {
+					prior, err := idx.opStore.GetLifecycle(*pair)
+					if err != nil {
+						return nil, nil, nil, err
+					}
+					claimable = prior.Claimable
+				}
+				if claimable == nil || claimable.BlockHeight > height {
+					continue
+				}
+				receipt, err := idx.client.TransactionReceipt(ctx, tx.Hash())
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				if receipt.BlockHash != block.Hash() || receipt.BlockNumber.Uint64() != height {
+					return nil, nil, nil, fmt.Errorf("claim receipt provenance mismatch")
+				}
+				if receipt.Status != ethtypes.ReceiptStatusSuccessful {
+					continue
+				}
+				// An end-of-block EIP-1967 lookup cannot identify the active
+				// implementation at a claim if this proxy upgraded in the block.
+				for _, observed := range logs {
+					if observed.BlockNumber == height && observed.Address == idx.processor.tokenBridge && len(observed.Topics) > 0 && observed.Topics[0] == sigProxyUpgrade {
+						return nil, nil, nil, fmt.Errorf("implementation changed in claim block %d", height)
+					}
+				}
+				impl, err := idx.client.StorageAt(ctx, idx.processor.tokenBridge, common.HexToHash("0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"), new(big.Int).SetUint64(height))
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				claim, err := decodeDirectTokenClaim(tx, receipt, idx.processor.tokenBridge, common.BytesToAddress(impl), time.Unix(int64(block.Time()), 0), pair, claimable)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				if claim != nil {
+					observations = append(observations, *claim)
+				}
+			}
+		}
+	}
 
 	var allOps []*types.BridgeOperation
 	for _, l := range logs {
-		if l.Removed {
-			idx.logger.Warn("Reorg detected: removed log",
-				"block", l.BlockNumber,
-				"tx", l.TxHash.Hex(),
-			)
-			continue
-		}
-
 		if idx.processor == nil {
 			continue
 		}
@@ -234,7 +347,7 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 				"block", l.BlockNumber,
 				"tx", l.TxHash.Hex(),
 			)
-			continue
+			return nil, nil, nil, fmt.Errorf("missing header for Neo X log at %d", l.BlockNumber)
 		}
 		blockTime := time.Unix(int64(header.Time), 0)
 
@@ -244,7 +357,7 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 				"tx", l.TxHash.Hex(),
 				"error", pErr,
 			)
-			continue
+			return nil, nil, nil, fmt.Errorf("decode Neo X log %s: %w", l.TxHash, pErr)
 		}
 		if op != nil {
 			allOps = append(allOps, op)
@@ -278,7 +391,7 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 		idx.logger.Info("NeoX indexer progress", "height", to, "logs_in_range", len(logs))
 	}
 
-	return newState, allOps, nil
+	return newState, allOps, observations, nil
 }
 
 // prefetchHeaders fetches all required block headers concurrently.
