@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -118,6 +119,40 @@ func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
 func (c *Client) BlockByNumber(ctx context.Context, number *big.Int) (*types.Block, error) {
 	return retryEVM(c, ctx, func() (*types.Block, error) {
 		return c.eth.BlockByNumber(ctx, number)
+	})
+}
+
+func (c *Client) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+	return retryEVM(c, ctx, func() (*types.Receipt, error) { return c.eth.TransactionReceipt(ctx, hash) })
+}
+
+func (c *Client) StorageAt(ctx context.Context, address common.Address, slot common.Hash, height *big.Int) ([]byte, error) {
+	return retryEVM(c, ctx, func() ([]byte, error) { return c.eth.StorageAt(ctx, address, slot, height) })
+}
+
+// CallFrame matches Geth's callTracer output. A successful outer receipt does
+// not imply that a nested call succeeded: each ancestor must be checked.
+type CallFrame struct {
+	Type  string         `json:"type"`
+	To    common.Address `json:"to"`
+	Input hexutil.Bytes  `json:"input"`
+	Error string         `json:"error,omitempty"`
+	Calls []CallFrame    `json:"calls,omitempty"`
+}
+
+type TransactionTrace struct {
+	TxHash common.Hash `json:"txHash"`
+	Result *CallFrame  `json:"result"`
+	Error  string      `json:"error,omitempty"`
+}
+
+// TraceBlock returns one complete call tree per transaction. Missing or
+// unsupported debug tracing is an error; it cannot prove claim coverage.
+func (c *Client) TraceBlock(ctx context.Context, height uint64) ([]TransactionTrace, error) {
+	return retryEVM(c, ctx, func() ([]TransactionTrace, error) {
+		var traces []TransactionTrace
+		err := c.eth.Client().CallContext(ctx, &traces, "debug_traceBlockByNumber", hexutil.EncodeUint64(height), map[string]any{"tracer": "callTracer", "timeout": "30s"})
+		return traces, err
 	})
 }
 

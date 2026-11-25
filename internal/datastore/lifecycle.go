@@ -1,10 +1,10 @@
 package datastore
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -93,6 +93,19 @@ type LifecycleObservation struct {
 	MessageType string // only for FactMessageType
 }
 
+// JSON persistence does not retain a time.Time's Location pointer. Compare
+// instants so a replay of the same chain observation remains idempotent.
+func sameEvidence(a, b *LifecycleEvidence) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Kind == b.Kind && a.Chain == b.Chain && a.Contract == b.Contract &&
+		a.Implementation == b.Implementation && a.BlockHeight == b.BlockHeight &&
+		a.BlockHash == b.BlockHash && a.TxHash == b.TxHash &&
+		a.ObservedAt.Equal(b.ObservedAt) && a.Position == b.Position &&
+		bytes.Equal(a.Payload, b.Payload)
+}
+
 func validateEvidence(e LifecycleEvidence) error {
 	switch e.Kind {
 	case "root", "event", "notification", "call", "trace":
@@ -157,7 +170,7 @@ func applyObservation(l *OperationLifecycle, o LifecycleObservation) error {
 		if o.Identity.BridgeType != types.BridgeTypeMessage || (o.MessageType != "execute" && o.MessageType != "store" && o.MessageType != "return") {
 			return errors.New("invalid message type observation")
 		}
-		if l.MessageType != nil && (*l.MessageType != o.MessageType || !reflect.DeepEqual(l.MessageTypeEvidence, &o.Evidence)) {
+		if l.MessageType != nil && (*l.MessageType != o.MessageType || !sameEvidence(l.MessageTypeEvidence, &o.Evidence)) {
 			return errors.New("conflicting message type observation")
 		}
 		if o.MessageType != "execute" && l.Execution != nil {
@@ -172,7 +185,7 @@ func applyObservation(l *OperationLifecycle, o LifecycleObservation) error {
 	if o.MessageType != "" {
 		return errors.New("message type only applies to message type observation")
 	}
-	if *dst != nil && !reflect.DeepEqual(*dst, &o.Evidence) {
+	if *dst != nil && !sameEvidence(*dst, &o.Evidence) {
 		return fmt.Errorf("conflicting %s evidence", o.Fact)
 	}
 	*dst = &o.Evidence
@@ -190,6 +203,33 @@ func (os *OperationStore) GetLifecycle(id OperationIdentity) (*OperationLifecycl
 		return nil, err
 	}
 	return &result, nil
+}
+
+// FindClaimableTokenPair only resolves a claim when one previously observed
+// claimable identifies both sides of its token pair. Historical gaps stay unknown.
+func (os *OperationStore) FindClaimableTokenPair(nonce uint64, destinationToken string) (*OperationIdentity, error) {
+	prefix := fmt.Sprintf("lifecycle:v1:token:deposit:%d:", nonce)
+	var found *OperationIdentity
+	err := os.store.ScanPrefix(prefix, func(key string, value []byte) error {
+		parts := strings.Split(strings.TrimPrefix(key, prefix), ":")
+		if len(parts) != 2 || parts[1] != normalizeTokenKeyPart(destinationToken) {
+			return nil
+		}
+		var l OperationLifecycle
+		if err := json.Unmarshal(value, &l); err != nil {
+			return err
+		}
+		if l.Claimable == nil {
+			return nil
+		}
+		if found != nil {
+			return errors.New("ambiguous token pair for claim")
+		}
+		found = &OperationIdentity{BridgeType: types.BridgeTypeToken, Direction: types.DirectionDeposit,
+			Nonce: nonce, SourceToken: parts[0], DestinationToken: parts[1]}
+		return nil
+	})
+	return found, err
 }
 
 // ApplyLifecycleObservations is atomic and serializes competing writers via
