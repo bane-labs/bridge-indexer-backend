@@ -6,8 +6,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/nspcc-dev/neo-go/pkg/core/state"
+	"github.com/nspcc-dev/neo-go/pkg/util"
+	"github.com/nspcc-dev/neo-go/pkg/vm/vmstate"
 
 	"github.com/bane-labs/bridge-indexer-backend/internal/datastore"
 	"github.com/bane-labs/bridge-indexer-backend/internal/types"
@@ -321,5 +325,76 @@ func TestSilentTokenClaimReconciledFromState(t *testing.T) {
 	st := mustStatus(t, opStore, "neo_x")
 	if c := st.Manifest.Claims; c == nil || c.Claims != 1 || c.Unresolved != 0 || c.GapsCleared || st.Complete || st.ClaimsDeferredBlocks == 0 {
 		t.Fatalf("status: %+v", st)
+	}
+}
+
+// Neo X testnet uses the mainnet native contract addresses with its own
+// upgrade history. A real testnet Native* event below mainnet's 3.0.0
+// height is indexed live, and historical recovery refuses the network.
+func TestNeoXTestnetIsNotHeldToMainnetVersions(t *testing.T) {
+	f := loadRecoveryFixture(t)
+	srv, _ := rpcServer(t, "", f.Exchanges[neoxTestnet])
+	opStore, beginErr := captureNeoXTestnet(t, srv.URL)
+	l := mustLifecycle(t, opStore, nativeID(types.DirectionDeposit, 938))
+	if l.Settlement == nil || l.Settlement.BlockHeight != testnetNativeRootBlock {
+		t.Fatalf("testnet root update: %+v", l)
+	}
+	if beginErr == nil || !strings.Contains(beginErr.Error(), "mainnet only") {
+		t.Fatalf("recovery accepted Neo X testnet: %v", beginErr)
+	}
+	if _, err := opStore.GetRecoveryManifest("neo_x"); !errors.Is(err, datastore.ErrNotFound) {
+		t.Fatalf("manifest created on testnet: %v", err)
+	}
+}
+
+// A manifest created before event-only recovery (claims required) cannot
+// silently switch to event-only ranges; it continues with --claim-scan.
+func TestOldManifestRequiresClaimScan(t *testing.T) {
+	ctx := context.Background()
+	f, rec := eventOnlyFixture(t, "unsupported", true)
+	hash, _, err := rec.blockHash(ctx, 103)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := datastore.RecoveryManifest{Chain: "neo_x", WatchedContracts: rec.contracts, ImplementationRanges: []string{"#39"},
+		RequiredPaths: append(datastore.BaseRecoveryPaths("neo_x"), "transactions", "claims"), StartHeight: 100, TargetHeight: 103, TargetHash: hash, NextHeight: 100}
+	if err := f.opStore.BeginRecovery(old); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Run(ctx, RecoveryRunOptions{Batch: 100000}, nil); err == nil || !strings.Contains(err.Error(), "--claim-scan") {
+		t.Fatalf("event-only run on an old manifest: %v", err)
+	}
+	if m, _ := f.opStore.GetRecoveryManifest("neo_x"); m.NextHeight != 100 {
+		t.Fatalf("watermark moved: %+v", m)
+	}
+	rec.ScanClaims(true)
+	if err := rec.Run(ctx, RecoveryRunOptions{Batch: 250}, nil); err != nil {
+		t.Fatalf("claim-scan continuation: %v", err)
+	}
+	if m, _ := f.opStore.GetRecoveryManifest("neo_x"); !m.Contiguous() {
+		t.Fatalf("not continued: %+v", m)
+	}
+}
+
+// N3 testnet (magic 894710606) is not held to mainnet's upgrade heights,
+// and N3 recovery refuses it.
+func TestN3TestnetIsNotHeldToMainnetVersions(t *testing.T) {
+	proc, opStore := newTestProcessor(t)
+	deposit := n3Event(proc.neoXBridge, "GasDeposit", n3Int(1), n3Bytes(2, 20), n3Int(5), n3Bytes(3, 20), n3Bytes(4, 32), n3Bytes(5, 32)).event
+	halt := []state.Execution{{VMState: vmstate.Halt, Events: []state.NotificationEvent{deposit}}}
+	after := uint32(n3BridgeNativeNamesFrom + 10)
+	for _, tc := range []struct {
+		network uint32
+		ok      bool
+	}{{894710606, true}, {mainnetN3Network, false}} {
+		idx := &N3Indexer{processor: proc, contracts: []util.Uint160{proc.neoXBridge, proc.messageBridge}, network: tc.network}
+		_, _, err := idx.decodeN3Executions(halt, after, "block", "tx", time.Unix(100, 0))
+		if (err == nil) != tc.ok {
+			t.Fatalf("network %d: GasDeposit after mainnet 3.0.0: %v", tc.network, err)
+		}
+	}
+	rec := &Recoverer{chain: chainN3, opStore: opStore, n3: &N3Indexer{network: 894710606}}
+	if err := rec.Begin(context.Background(), 1, 2, false); err == nil || !strings.Contains(err.Error(), "mainnet only") {
+		t.Fatalf("N3 testnet recovery: %v", err)
 	}
 }

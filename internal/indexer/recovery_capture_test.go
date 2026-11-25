@@ -74,6 +74,15 @@ func TestCaptureRecoveryFixtures(t *testing.T) {
 			}
 		}
 	}
+	// Neo X testnet shares the native contract addresses but not mainnet's
+	// upgrade history: live indexing of a testnet block whose Native* event
+	// lies below mainnet's 3.0.0 height, and a refused recovery.
+	testnetRPC := envOr("CAPTURE_NEOX_TESTNET_RPC", "https://testnet.rpc.banelabs.org")
+	f.Endpoints[neoxTestnet] = testnetRPC
+	srv, captured := rpcServer(t, testnetRPC, nil)
+	captureNeoXTestnet(t, srv.URL)
+	f.Exchanges[neoxTestnet] = captured()
+
 	raw, err := json.MarshalIndent(f, "", " ")
 	if err != nil {
 		t.Fatal(err)

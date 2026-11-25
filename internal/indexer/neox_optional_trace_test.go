@@ -39,6 +39,8 @@ type fakeNeoX struct {
 	storage map[common.Hash]func(height uint64) common.Hash
 	// maxLogsRange, when set, fails eth_getLogs over more blocks.
 	maxLogsRange uint64
+	// chainID answers eth_chainId (default mainnet).
+	chainID string
 }
 
 func (f *fakeNeoX) setTraceMode(mode string) {
@@ -85,6 +87,11 @@ func (f *fakeNeoX) handle(method string, params []json.RawMessage) (any, map[str
 	switch method {
 	case "eth_blockNumber":
 		return "0x67", nil
+	case "eth_chainId":
+		if f.chainID != "" {
+			return f.chainID, nil
+		}
+		return "0xba93", nil
 	case "eth_getBlockByNumber":
 		b := f.blocks[heightParam(params[0])]
 		if b == nil {

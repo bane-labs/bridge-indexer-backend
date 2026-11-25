@@ -124,6 +124,25 @@ func NewN3Recoverer(client *n3.Client, store *datastore.Store, opStore *datastor
 	return &Recoverer{chain: chainN3, opStore: opStore, contracts: contracts, logger: logger, n3: idx, n3Workers: idx.blockWorkerCount(), recorded: recorded}, nil
 }
 
+// requireMainnet refuses another network: recovery's version table,
+// claimable storage slot and claim implementations are mainnet facts.
+func (r *Recoverer) requireMainnet(ctx context.Context) error {
+	if r.neox != nil {
+		if ok, err := r.neox.isMainnet(ctx); err != nil {
+			return err
+		} else if !ok {
+			return errNotMainnet(r.chain, r.neox.chainID, mainnetNeoXChainID)
+		}
+		return nil
+	}
+	if ok, err := r.n3.isMainnet(ctx); err != nil {
+		return err
+	} else if !ok {
+		return errNotMainnet(r.chain, uint64(r.n3.network), uint64(mainnetN3Network))
+	}
+	return nil
+}
+
 // Chain returns the chain this recoverer replays.
 func (r *Recoverer) Chain() string { return r.chain }
 
@@ -188,6 +207,9 @@ func (r *Recoverer) Begin(ctx context.Context, start, target uint64, trustIndex 
 	}
 	if start > target {
 		return fmt.Errorf("start %d is after target %d", start, target)
+	}
+	if err := r.requireMainnet(ctx); err != nil {
+		return err
 	}
 	hash, err := r.ResolveTarget(ctx, target)
 	if err != nil {
@@ -255,6 +277,14 @@ func (r *Recoverer) Run(ctx context.Context, opts RecoveryRunOptions, report fun
 	}
 	if !slices.Equal(m.WatchedContracts, r.contracts) {
 		return fmt.Errorf("configured contracts %v differ from manifest %v", r.contracts, m.WatchedContracts)
+	}
+	if err := r.requireMainnet(ctx); err != nil {
+		return err
+	}
+	if r.neox != nil && r.neox.deferClaims && (slices.Contains(m.RequiredPaths, "claims") || slices.Contains(m.RequiredPaths, "transactions")) {
+		// A manifest created before event-only recovery requires every
+		// range to be scanned for claims; its paths cannot change in place.
+		return errors.New("this Neo X manifest requires per-block claim scanning (created by an earlier version): continue it with --claim-scan, or start a new manifest on a fresh database copy")
 	}
 	// The captured target binds the manifest to this chain and its history.
 	hash, _, err := r.blockHash(ctx, m.TargetHeight)

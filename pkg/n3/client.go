@@ -170,6 +170,17 @@ func (c *Client) waitForPacing(ctx context.Context, conn *pooledRPC) error {
 	return nil
 }
 
+// Network returns the N3 network magic (getversion).
+func (c *Client) Network(ctx context.Context) (uint32, error) {
+	return retry(c, ctx, func(rpc *rpcclient.Client) (uint32, error) {
+		v, err := rpc.GetVersion()
+		if err != nil {
+			return 0, err
+		}
+		return uint32(v.Protocol.Network), nil
+	})
+}
+
 func (c *Client) GetBlockCount(ctx context.Context) (uint32, error) {
 	return retry(c, ctx, func(rpc *rpcclient.Client) (uint32, error) {
 		return rpc.GetBlockCount()

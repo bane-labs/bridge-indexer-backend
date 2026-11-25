@@ -24,8 +24,12 @@ func TestBridgeEventFamiliesAreGatedByActivationHeight(t *testing.T) {
 		{message, sigMessageSend, neoxMessageBridgeFrom, true},
 		{common.HexToAddress("0x1234"), sigGasDeposit, 1 << 40, true}, // unknown contract: no history
 	} {
-		if err := checkNeoXLogVersion(tc.addr, tc.sig, tc.height); (err == nil) != tc.ok {
+		if err := checkNeoXLogVersion(true, tc.addr, tc.sig, tc.height); (err == nil) != tc.ok {
 			t.Errorf("%s %s at %d: %v", tc.addr, tc.sig, tc.height, err)
+		}
+		// Testnet shares the addresses but not the upgrade history.
+		if err := checkNeoXLogVersion(false, tc.addr, tc.sig, tc.height); err != nil {
+			t.Errorf("non-mainnet %s %s at %d: %v", tc.addr, tc.sig, tc.height, err)
 		}
 	}
 	for _, tc := range []struct {
@@ -41,8 +45,11 @@ func TestBridgeEventFamiliesAreGatedByActivationHeight(t *testing.T) {
 		{"0x" + mainnetN3MessageBridgeHash, "Store", n3MessageBridgeDeployedAt, true},
 		{mainnetN3MessageBridgeHash, "Store", n3MessageBridgeDeployedAt - 1, false},
 	} {
-		if err := checkN3NotificationVersion(tc.contract, tc.name, tc.height); (err == nil) != tc.ok {
+		if err := checkN3NotificationVersion(true, tc.contract, tc.name, tc.height); (err == nil) != tc.ok {
 			t.Errorf("%s %s at %d: %v", tc.contract, tc.name, tc.height, err)
+		}
+		if err := checkN3NotificationVersion(false, tc.contract, tc.name, tc.height); err != nil {
+			t.Errorf("non-mainnet %s %s at %d: %v", tc.contract, tc.name, tc.height, err)
 		}
 	}
 }

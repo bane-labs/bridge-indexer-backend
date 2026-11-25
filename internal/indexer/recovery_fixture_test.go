@@ -298,3 +298,29 @@ func useFakeEventFilter(t *testing.T, r *Recoverer, f *fakeEventFilter) {
 	}
 	r.UseEventFilter(filter)
 }
+
+// neoxTestnet keys the recorded Neo X testnet exchanges.
+const neoxTestnet = "neo_x_testnet"
+
+// testnetNativeRootBlock holds NativeDepositRootUpdate nonce 938 on Neo X
+// testnet, below mainnet's 3.0.0 activation height.
+const testnetNativeRootBlock uint64 = 1_732_185
+
+// captureNeoXTestnet runs the live Neo X range decoder over the testnet
+// block and a recovery begin, against url. Shared by capture and replay.
+func captureNeoXTestnet(t *testing.T, url string) (*datastore.OperationStore, error) {
+	t.Helper()
+	store, opStore := openRecoveryStore(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	client, err := neox.NewClient(context.Background(), []string{url}, logger, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proc := NewNeoXEventProcessor(opStore, mainnetNeoXTokenBridge, mainnetNeoXMessageBridge, logger)
+	live := NewNeoXIndexer(client, store, opStore, nil, proc, []string{mainnetNeoXTokenBridge, mainnetNeoXMessageBridge}, 0, 1, logger, nil)
+	if err := live.processBlockRange(context.Background(), testnetNativeRootBlock, testnetNativeRootBlock); err != nil {
+		t.Fatalf("testnet live range: %v", err)
+	}
+	rec := NewNeoXRecoverer(client, store, opStore, mainnetNeoXTokenBridge, mainnetNeoXMessageBridge, 1, logger)
+	return opStore, rec.Begin(context.Background(), testnetNativeRootBlock, testnetNativeRootBlock, false)
+}

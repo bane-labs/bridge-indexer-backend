@@ -131,6 +131,15 @@ func retryEVM[T any](c *Client, ctx context.Context, op func() (T, error)) (T, e
 	return zero, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
 }
 
+// ChainID returns the chain's EIP-155 chain ID.
+func (c *Client) ChainID(ctx context.Context) (uint64, error) {
+	id, err := retryEVM(c, ctx, func() (*big.Int, error) { return c.eth.ChainID(ctx) })
+	if err != nil {
+		return 0, err
+	}
+	return id.Uint64(), nil
+}
+
 func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
 	return retryEVM(c, ctx, func() (uint64, error) {
 		return c.eth.BlockNumber(ctx)

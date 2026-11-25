@@ -24,8 +24,13 @@ var (
 	sigGasBridgeUnpause = crypto.Keccak256Hash([]byte("GasBridgeUnpause()"))
 )
 
-// Mainnet contracts whose versions are known.
+// Mainnet contracts whose versions are known. Neo X testnet uses the same
+// native contract addresses with a different upgrade history, so the rules
+// below apply only when the connected chain is mainnet.
 const (
+	mainnetNeoXChainID uint64 = 47763     // eth_chainId 0xba93
+	mainnetN3Network   uint32 = 860833102 // getversion protocol.network
+
 	mainnetNeoXBridgeAddress        = "0x1212000000000000000000000000000000000004"
 	mainnetNeoXMessageBridgeAddress = "0x1212000000000000000000000000000000000009"
 	mainnetN3BridgeHash             = "bb19cfc864b73159277e1fd39694b3fd5fc613d2"
@@ -63,8 +68,11 @@ func isNeoXNativeSig(sig common.Hash) bool {
 // height could not have emitted: a Gas* event from 3.0.0 on, a Native* event
 // before it, or any MessageBridge event while the genesis placeholder was
 // active. Contracts other than the mainnet ones have no known history and
-// accept both families.
-func checkNeoXLogVersion(address common.Address, sig common.Hash, height uint64) error {
+// accept both families, as does any chain other than mainnet.
+func checkNeoXLogVersion(mainnet bool, address common.Address, sig common.Hash, height uint64) error {
+	if !mainnet {
+		return nil
+	}
 	switch address {
 	case common.HexToAddress(mainnetNeoXBridgeAddress):
 		if isNeoXGasSig(sig) && height >= neoxBridgeNativeNamesFrom {
@@ -92,8 +100,11 @@ func n3EventFamily(name string) string {
 }
 
 // checkN3NotificationVersion applies the same rule to N3 bridge
-// notifications. contract is the LE hash string.
-func checkN3NotificationVersion(contract, name string, height uint64) error {
+// notifications on N3 mainnet. contract is the LE hash string.
+func checkN3NotificationVersion(mainnet bool, contract, name string, height uint64) error {
+	if !mainnet {
+		return nil
+	}
 	switch strings.TrimPrefix(strings.ToLower(contract), "0x") {
 	case mainnetN3BridgeHash:
 		if height < n3BridgeDeployedAt {
@@ -115,4 +126,11 @@ func checkN3NotificationVersion(contract, name string, height uint64) error {
 		}
 	}
 	return nil
+}
+
+// errNotMainnet is returned by historical recovery on another network: its
+// version table, claimable storage slot and claim implementations are
+// mainnet facts.
+func errNotMainnet(chain string, got, want uint64) error {
+	return fmt.Errorf("historical recovery supports %s mainnet only (network %d, mainnet %d): the bridge version history it relies on is mainnet-specific", chain, got, want)
 }

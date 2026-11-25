@@ -56,6 +56,9 @@ func (r *Recoverer) ReconcileClaims(ctx context.Context) (*datastore.ClaimReconc
 	if r.neox == nil {
 		return nil, errors.New("claim reconciliation applies to neo_x only")
 	}
+	if err := r.requireMainnet(ctx); err != nil {
+		return nil, err
+	}
 	m, err := r.opStore.GetRecoveryManifest(chainNeoX)
 	if err != nil {
 		return nil, err

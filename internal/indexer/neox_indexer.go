@@ -51,6 +51,24 @@ type NeoXIndexer struct {
 	deferClaims bool
 	// headerFetchConcurrency bounds parallel header fetches (0: 10).
 	headerFetchConcurrency int
+	// chainID is learned once from the node; the mainnet version rules
+	// apply only when it is mainnet's.
+	chainMu sync.Mutex
+	chainID uint64
+}
+
+// isMainnet reports whether the connected chain is Neo X mainnet.
+func (idx *NeoXIndexer) isMainnet(ctx context.Context) (bool, error) {
+	idx.chainMu.Lock()
+	defer idx.chainMu.Unlock()
+	if idx.chainID == 0 {
+		id, err := idx.client.ChainID(ctx)
+		if err != nil {
+			return false, fmt.Errorf("Neo X chain ID: %w", err)
+		}
+		idx.chainID = id
+	}
+	return idx.chainID == mainnetNeoXChainID, nil
 }
 
 // filterLogsError marks an eth_getLogs failure, which a caller may retry
@@ -208,6 +226,10 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 		Addresses: idx.contracts,
 	}
 
+	mainnet, err := idx.isMainnet(ctx)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 	logs, err := idx.client.FilterLogs(ctx, query)
 	if err != nil {
 		return nil, nil, nil, nil, filterLogsError{fmt.Errorf("filter logs %d-%d: %w", from, to, err)}
@@ -237,7 +259,7 @@ func (idx *NeoXIndexer) processBlockRangeWithResult(ctx context.Context, from, t
 			return nil, nil, nil, nil, fmt.Errorf("removed Neo X log at %d", l.BlockNumber)
 		}
 		if len(l.Topics) > 0 {
-			if err := checkNeoXLogVersion(l.Address, l.Topics[0], l.BlockNumber); err != nil {
+			if err := checkNeoXLogVersion(mainnet, l.Address, l.Topics[0], l.BlockNumber); err != nil {
 				return nil, nil, nil, nil, fmt.Errorf("log %s/%d: %w", l.TxHash, l.Index, err)
 			}
 		}
